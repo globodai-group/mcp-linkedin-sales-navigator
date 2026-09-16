@@ -7,6 +7,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ensureNavigator } from "../browser/navigator.js";
+import { assertListId, listIdSchema } from "../browser/url.js";
 import {
   SEARCH_SELECTORS,
   LIST_SELECTORS,
@@ -147,8 +148,7 @@ export function registerExportTools(server: McpServer): void {
       source: z
         .enum(["current_search", "list"])
         .describe('Export from current search results ("current_search") or a specific list ("list")'),
-      listId: z
-        .string()
+      listId: listIdSchema
         .optional()
         .describe("List ID to export from (required if source is 'list')"),
       format: z
@@ -170,14 +170,21 @@ export function registerExportTools(server: McpServer): void {
     },
     async (params) => {
       try {
-        const nav = await ensureNavigator();
-        const effectiveLimit = Math.min(params.limit, 250);
-
+        let listId: string | undefined;
         if (params.source === "list") {
           if (!params.listId) {
             throw new Error("listId is required when source is 'list'");
           }
-          await nav.navigateTo(`${URLS.LEAD_LISTS}/${params.listId}`);
+          listId = assertListId(params.listId);
+        }
+
+        const nav = await ensureNavigator();
+        const effectiveLimit = Math.min(params.limit, 250);
+
+        if (listId) {
+          await nav.navigateTo(
+            `${URLS.LEAD_LISTS}/${encodeURIComponent(listId)}`
+          );
           await nav
             .getPage()
             .waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
