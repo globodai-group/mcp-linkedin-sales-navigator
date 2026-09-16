@@ -136,6 +136,8 @@ export function createMemoryUsageStore(initial: UsageData = {}): UsageStore {
   };
 }
 
+let missingUsageFileWarned = false;
+
 export function createFileUsageStore(filePath: string): UsageStore {
   return {
     async load() {
@@ -152,6 +154,12 @@ export function createFileUsageStore(filePath: string): UsageStore {
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT") {
+          if (!missingUsageFileWarned) {
+            missingUsageFileWarned = true;
+            console.error(
+              "[LSN] Usage file not found; starting counters at zero."
+            );
+          }
           return {};
         }
         console.error(
@@ -412,6 +420,7 @@ export function configureRateLimit(
 
 export function resetRateLimitForTests(): void {
   limiter = null;
+  missingUsageFileWarned = false;
 }
 
 export function isRateLimitConfigured(): boolean {
@@ -420,16 +429,9 @@ export function isRateLimitConfigured(): boolean {
 
 export function getUsageLimiter(): UsageLimiter {
   if (!limiter) {
-    limiter = new UsageLimiter({
-      store: createMemoryUsageStore(),
-      budgets: {
-        profileViews: DEFAULT_USAGE.dailyProfileViews,
-        searches: DEFAULT_USAGE.dailySearches,
-        saves: DEFAULT_USAGE.dailySaves,
-        inmails: DEFAULT_USAGE.dailyInmails,
-      },
-      minActionIntervalMs: DEFAULT_USAGE.minActionIntervalMs,
-    });
+    throw new Error(
+      "Usage limiter is not configured. Call configureRateLimit at startup."
+    );
   }
   return limiter;
 }

@@ -10,6 +10,7 @@ import {
   createFileUsageStore,
   createMemoryUsageStore,
   defaultUsageFilePath,
+  getUsageLimiter,
   recordInMailAttempt,
   resetRateLimitForTests,
   sanitizeUsageData,
@@ -214,6 +215,32 @@ describe("UsageLimiter budgets", () => {
 });
 
 describe("usage store", () => {
+  it("fails closed when the singleton limiter is not configured", () => {
+    expect(() => getUsageLimiter()).toThrow(/not configured/);
+  });
+
+  it("warns once on stderr when the usage file is missing", async () => {
+    const filePath = join(
+      tmpdir(),
+      `lsn-usage-missing-${Date.now()}-${process.pid}.json`
+    );
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+    const store = createFileUsageStore(filePath);
+
+    await expect(store.load()).resolves.toEqual({});
+    await expect(store.load()).resolves.toEqual({});
+    expect(
+      stderr.mock.calls.filter((args) =>
+        String(args[0]).includes("Usage file not found")
+      )
+    ).toHaveLength(1);
+    expect(stdout).not.toHaveBeenCalled();
+
+    stderr.mockRestore();
+    stdout.mockRestore();
+  });
+
   it("recovers from a corrupt file and warns on stderr", async () => {
     const dir = join(tmpdir(), `lsn-usage-${Date.now()}-${process.pid}`);
     await mkdir(dir, { recursive: true });
