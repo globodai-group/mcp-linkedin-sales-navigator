@@ -549,6 +549,40 @@ export function getNavigator(): SalesNavigator {
 }
 
 /**
+ * Share one in-flight promise across concurrent callers.
+ * Assigns `state.current` synchronously before `start` runs.
+ */
+export function withSingleFlight<T>(
+  state: { current: Promise<T> | null },
+  start: () => Promise<T>
+): Promise<T> {
+  if (state.current) return state.current;
+
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const shared = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  // Publish before any await so concurrent callers join this attempt.
+  state.current = shared;
+
+  void (async () => {
+    try {
+      resolve(await start());
+    } catch (error) {
+      reject(error);
+    } finally {
+      if (state.current === shared) {
+        state.current = null;
+      }
+    }
+  })();
+
+  return shared;
+}
+
+/**
  * Attach to the browser without navigating or opening a new tab.
  * Used by linkedin_session_status and startup warmup.
  */
@@ -564,7 +598,18 @@ export async function ensureAttached(): Promise<SalesNavigator> {
   }
 
   const { browser, auth } = storedConfig;
-  pendingInit = (async () => {
+
+  // Assign pendingInit synchronously before any await so concurrent
+  // reconnects share one attempt instead of overwriting each other.
+  let resolveInit!: (nav: SalesNavigator) => void;
+  let rejectInit!: (reason?: unknown) => void;
+  const initPromise = new Promise<SalesNavigator>((resolve, reject) => {
+    resolveInit = resolve;
+    rejectInit = reject;
+  });
+  pendingInit = initPromise;
+
+  void (async () => {
     const nav = new SalesNavigator(browser);
     nav.setSessionLostHandler(() => {
       nav.resetAuthVerified();
@@ -584,24 +629,26 @@ export async function ensureAttached(): Promise<SalesNavigator> {
         await nav.close().catch(() => {});
         throw new Error("Browser disconnected during initialization");
       }
-      return nav;
+      resolveInit(nav);
     } catch (error) {
       // initialize() also closes, but a throw before that catch (or a
       // future edit that drops it) must not leak a CDP connection.
       await nav.close().catch(() => {});
-      throw error;
+      rejectInit(error);
+    } finally {
+      if (pendingInit === initPromise) {
+        pendingInit = null;
+      }
     }
   })();
 
   try {
-    return await pendingInit;
+    return await initPromise;
   } catch (error) {
     // initialize() already wraps with authFailureHint; rethrow as-is
     // unless somehow bare.
     if (error instanceof Error) throw error;
     throw new Error(authFailureHint(auth, error));
-  } finally {
-    pendingInit = null;
   }
 }
 
