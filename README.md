@@ -27,6 +27,7 @@
 | `linkedin_create_lead_list` | Create a new lead list |
 | `linkedin_send_inmail` | Send an InMail message (with dry-run support) |
 | `linkedin_export_leads` | Export leads to JSON or CSV format |
+| `linkedin_session_status` | Check browser connection, Sales Navigator auth, and today's usage budgets (call this first when debugging) |
 
 ## Quick Start
 
@@ -53,19 +54,41 @@ npm run build
 
 ### Configuration
 
-The server is configured via environment variables:
+The server is configured via environment variables (read in `src/index.ts`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LSN_AUTH_METHOD` | `cdp` | Authentication method: `cdp`, `session`, or `cookies` |
-| `LSN_CDP_ENDPOINT` | `http://localhost:9222` | Chrome DevTools Protocol endpoint |
-| `LSN_USER_DATA_DIR` | — | Path to Chrome user data directory (for `session` method) |
-| `LSN_COOKIES_PATH` | — | Path to cookies JSON file (for `cookies` method) |
-| `LSN_HEADLESS` | `false` | Run browser in headless mode |
-| `LSN_VIEWPORT_WIDTH` | `1280` | Browser viewport width |
-| `LSN_VIEWPORT_HEIGHT` | `900` | Browser viewport height |
-| `LSN_NAVIGATION_TIMEOUT` | `30000` | Navigation timeout in ms |
-| `LSN_ACTION_TIMEOUT` | `10000` | Action timeout in ms |
+| `LSN_AUTH_METHOD` | `cdp` | Auth mode: `cdp` (attach to running Chrome), `session` (Playwright + user data dir), or `cookies` (JSON cookie file) |
+| `LSN_CDP_ENDPOINT` | `http://localhost:9222` | CDP HTTP endpoint when `LSN_AUTH_METHOD=cdp` |
+| `LSN_COOKIES_PATH` | *(unset)* | Path to exported cookies JSON when `LSN_AUTH_METHOD=cookies` |
+| `LSN_USER_DATA_DIR` | *(unset)* | Chrome profile directory when `LSN_AUTH_METHOD=session` |
+| `LSN_HEADLESS` | `false` | Set to `true` to run Chromium headless (`session` / `cookies` modes) |
+| `LSN_NAVIGATION_TIMEOUT` | `30000` | Page navigation timeout (ms) |
+| `LSN_ACTION_TIMEOUT` | `10000` | Click/fill/wait timeout (ms) |
+| `LSN_VIEWPORT_WIDTH` | `1280` | Viewport width (px) |
+| `LSN_VIEWPORT_HEIGHT` | `900` | Viewport height (px) |
+| `LSN_DAILY_PROFILE_VIEWS` | `80` | Daily cap for `linkedin_get_lead_profile`. `0` = unlimited |
+| `LSN_DAILY_SEARCHES` | `30` | Daily cap for `linkedin_search_leads`, plus each results page fetched by `linkedin_export_leads`. `0` = unlimited |
+| `LSN_DAILY_SAVES` | `50` | Daily cap for `linkedin_save_lead` + `linkedin_create_lead_list`. `0` = unlimited |
+| `LSN_DAILY_INMAILS` | `15` | Daily cap for `linkedin_send_inmail` sends (dry runs do not count). `0` = unlimited |
+| `LSN_MIN_ACTION_INTERVAL_MS` | `4000` | Minimum delay between page navigations/actions, plus 0–50% random jitter |
+| `LSN_USAGE_FILE` | `~/.mcp-linkedin-sales-navigator/usage.json` | Local JSON file for daily counters (dates and counts only) |
+
+## Rate limits and account safety
+
+This server throttles **your own** Sales Navigator activity so a Claude session does not fire actions back-to-back. It is not anti-detection: there is no fingerprint spoofing, user-agent rotation, or proxy support.
+
+| Budget | Default | What counts |
+|--------|---------|-------------|
+| Profile views | 80 / local day | Each `linkedin_get_lead_profile` call |
+| Searches | 30 / local day | Each `linkedin_search_leads` call, and each results page fetched by `linkedin_export_leads` |
+| Saves | 50 / local day | `linkedin_save_lead` (real save) and `linkedin_create_lead_list` |
+| InMails | 15 / local day | `linkedin_send_inmail` calls that actually send. Dry runs do not count |
+| Action pacing | 4000 ms + 0–50% jitter | Minimum gap between navigations/actions across all tools |
+
+`0` on a daily budget means unlimited. Raise a cap by setting the matching `LSN_DAILY_*` variable; check `usageToday` on `linkedin_session_status` for used / cap / remaining. Counters reset at the next local midnight and live in `LSN_USAGE_FILE` (or `~/.mcp-linkedin-sales-navigator/usage.json`). That file stores only dates, category names, and counts.
+
+LinkedIn does not publish official automation limits and restricts automated activity in its User Agreement. **No tool can guarantee an account will not be restricted.** Start with the defaults, spread activity over working hours, and stay within your Sales Navigator InMail credits.
 
 ## Authentication Methods
 
@@ -84,10 +107,16 @@ Start Chrome with remote debugging:
 google-chrome --remote-debugging-port=9222
 
 # Windows
-chrome.exe --remote-debugging-port=9222
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+
+# If Chrome is installed elsewhere, quote the full path. Node.js 20+ is required.
 ```
 
+Use PowerShell or Command Prompt. Keep the debugging port free (default `9222`) and match `LSN_CDP_ENDPOINT`.
+
 Then log into LinkedIn Sales Navigator manually. The MCP server connects to this browser.
+
+**Shutdown behavior (CDP):** when the MCP server exits, it **detaches** from your Chrome instance only. It does **not** close your tabs or quit the browser.
 
 ```bash
 LSN_AUTH_METHOD=cdp LSN_CDP_ENDPOINT=http://localhost:9222 npx globodai-mcp-linkedin-sales-navigator
@@ -108,6 +137,52 @@ Export your LinkedIn cookies and provide them as a JSON file:
 ```bash
 LSN_AUTH_METHOD=cookies LSN_COOKIES_PATH=/path/to/linkedin-cookies.json npx globodai-mcp-linkedin-sales-navigator
 ```
+
+## MCP client setup
+
+Use the same `command`, `args`, and `env` block in any MCP client. Replace paths and endpoints for your machine.
+
+### Claude Desktop
+
+Edit the config file:
+
+| OS | Path |
+|----|------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+Example entry:
+
+```json
+{
+  "mcpServers": {
+    "linkedin-sales-navigator": {
+      "command": "npx",
+      "args": ["-y", "globodai-mcp-linkedin-sales-navigator"],
+      "env": {
+        "LSN_AUTH_METHOD": "cdp",
+        "LSN_CDP_ENDPOINT": "http://localhost:9222"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving.
+
+### Claude Code
+
+From a shell (adjust env vars as needed):
+
+```bash
+claude mcp add linkedin-sales-navigator -- \
+  env LSN_AUTH_METHOD=cdp LSN_CDP_ENDPOINT=http://localhost:9222 \
+  npx -y globodai-mcp-linkedin-sales-navigator
+```
+
+### Generic MCP client
+
+Point the client at the package binary via `npx` or `node /path/to/mcp-linkedin-sales-navigator/dist/index.js`, stdio transport, with the environment variables from the table above.
 
 ## Clawdbot / CORTX Integration
 
@@ -184,6 +259,19 @@ When using Clawdbot's browser relay, the AI assistant can directly control a bro
 }
 ```
 
+## Troubleshooting
+
+Start with the `linkedin_session_status` tool. It connects lazily (same as other tools), reports `authMethod`, `browserConnected`, `authenticated`, `usageToday`, and a short hint for the next step.
+
+| Symptom | What to check |
+|---------|----------------|
+| **Browser not initialized** | Fixed in **0.2.0**: the browser connects on each tool call if startup failed. Ensure Chrome is running with remote debugging (CDP) or paths are set for `session` / `cookies`. Retry after fixing the environment. |
+| **Not authenticated** | Sales Navigator’s shell renders a few seconds after load. Log in at [linkedin.com/sales](https://www.linkedin.com/sales) in the same browser profile the server uses, then call `linkedin_session_status` again. |
+| **CDP endpoint unreachable** | Confirm Chrome was started with `--remote-debugging-port=9222` (or your port), nothing else bound to that port, and `LSN_CDP_ENDPOINT` matches (including `http://`). |
+| **Expired session / cookie** | Re-authenticate in the browser or refresh exported cookies. An expired `li_at` cookie produces auth failures until you sign in again. |
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for reporting selector breakage without sharing secrets.
+
 ## Architecture
 
 ```
@@ -223,16 +311,30 @@ npm run lint
 
 # Type check
 npm run typecheck
+
+# Unit tests
+npm test
 ```
 
 ## Selector Maintenance
 
-LinkedIn periodically updates their DOM structure. If tools stop working:
+LinkedIn rotates hashed CSS module classes on every deploy. Selectors in this project follow a fixed priority (see PR #3 and `src/browser/selectors.ts`):
 
-1. Open Sales Navigator in Chrome DevTools
-2. Inspect the elements that changed
-3. Update selectors in `src/browser/selectors.ts`
-4. Submit a PR with the updated selectors
+1. **`data-anonymize="..."`** and similar LinkedIn field markers (`person-name`, `headline`, `title`, `company-name`, …)
+2. **`data-x--...`**, `data-sn-view-name`, `data-control-name` — product hooks tied to behavior
+3. **Semantic HTML / ARIA** and shared **`artdeco-*`** design-system classes
+4. **Playwright text matchers** (`:has-text()`, `:text-matches()`) only when nothing else is stable
+
+Field locators are **prioritised arrays**, resolved in order by `src/browser/query.ts` (not comma-separated CSS lists, which follow document order).
+
+The lead profile **topcard** headline and location often lack stable hooks. `src/browser/dom-extract.ts` walks structure from stable anchors (name `h1`, Save button) and reads text by position, with selector fallbacks afterward.
+
+When tools break after a LinkedIn UI change:
+
+1. Reproduce on the affected page and tool
+2. Inspect DOM hooks (`data-anonymize`, `data-control-name`) before class names
+3. Update selectors, query arrays, or dom-extract heuristics as needed
+4. Open a PR with a redacted HTML snippet (see [CONTRIBUTING.md](CONTRIBUTING.md))
 
 ## License
 

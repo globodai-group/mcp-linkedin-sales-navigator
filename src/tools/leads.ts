@@ -6,56 +6,69 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getNavigator } from "../browser/navigator.js";
+import { ensureNavigator } from "../browser/navigator.js";
+import { assertSalesNavigatorUrl, salesNavigatorUrlSchema } from "../browser/url.js";
 import { PROFILE_SELECTORS, WAIT_CONDITIONS } from "../browser/selectors.js";
+import { queryAll, queryFirst, textOfFirst } from "../browser/query.js";
+import { extractEntryDatesBrowser } from "../browser/dom-extract.js";
 import type { LeadProfile, ExperienceEntry, EducationEntry } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  consumeBudget,
+} from "../browser/rate-limit.js";
 
 /**
  * Parse a lead profile from the current page.
  */
 async function parseLeadProfile(): Promise<LeadProfile> {
-  const nav = getNavigator();
+  const nav = await ensureNavigator();
   const page = nav.getPage();
 
   // Wait for profile to load
   await nav.waitForSelector(PROFILE_SELECTORS.PROFILE_CONTAINER, WAIT_CONDITIONS.PROFILE_LOAD_TIMEOUT);
 
-  const fullName = (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_NAME)) || "Unknown";
+  // Name/headline/location have no stable per-field selector on the
+  // current topcard markup (see issue #2) - extract them together via
+  // the structural DOM heuristic, falling back to the selector-based
+  // path (PROFILE_NAME) only if that heuristic comes up empty.
+  const topcard = await nav.extractTopcardFields();
+  const fullName =
+    topcard.name || (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_NAME)) || "Unknown";
   const nameParts = fullName.split(" ");
 
   // Parse experience
   const experience: ExperienceEntry[] = [];
-  const expElements = await page.$$(PROFILE_SELECTORS.EXPERIENCE_ITEM);
+  const expElements = await queryAll(page, PROFILE_SELECTORS.EXPERIENCE_ITEM);
   for (const exp of expElements) {
-    const title = (await exp.$(PROFILE_SELECTORS.EXPERIENCE_TITLE))
-      ? (await (await exp.$(PROFILE_SELECTORS.EXPERIENCE_TITLE))?.textContent())?.trim() || ""
-      : "";
-    const company = (await exp.$(PROFILE_SELECTORS.EXPERIENCE_COMPANY))
-      ? (await (await exp.$(PROFILE_SELECTORS.EXPERIENCE_COMPANY))?.textContent())?.trim() || ""
-      : "";
-    const dates = (await exp.$(PROFILE_SELECTORS.EXPERIENCE_DATES))
-      ? (await (await exp.$(PROFILE_SELECTORS.EXPERIENCE_DATES))?.textContent())?.trim() || ""
-      : "";
+    const title = (await textOfFirst(exp, PROFILE_SELECTORS.EXPERIENCE_TITLE)) || "";
+    const company = (await textOfFirst(exp, PROFILE_SELECTORS.EXPERIENCE_COMPANY)) || "";
+    // The date range has no selectable hook in the current markup, so
+    // fall back to finding it by content within this entry.
+    const dates =
+      (await textOfFirst(exp, PROFILE_SELECTORS.EXPERIENCE_DATES)) ||
+      (await exp.evaluate(extractEntryDatesBrowser).catch(() => null)) ||
+      "";
+
+    // LinkedIn separates the range with an en dash (–), not a hyphen.
+    const [startDate, endDate] = dates.split("–").map((part) => part.trim());
 
     experience.push({
       title,
       company,
       isCurrent: dates.toLowerCase().includes("present"),
-      startDate: dates.split("–")[0]?.trim(),
-      endDate: dates.split("–")[1]?.trim(),
+      startDate,
+      endDate,
     });
   }
 
   // Parse education
   const education: EducationEntry[] = [];
-  const eduElements = await page.$$(PROFILE_SELECTORS.EDUCATION_ITEM);
+  const eduElements = await queryAll(page, PROFILE_SELECTORS.EDUCATION_ITEM);
   for (const edu of eduElements) {
-    const school = (await edu.$(PROFILE_SELECTORS.EDUCATION_SCHOOL))
-      ? (await (await edu.$(PROFILE_SELECTORS.EDUCATION_SCHOOL))?.textContent())?.trim() || ""
-      : "";
-    const degree = (await edu.$(PROFILE_SELECTORS.EDUCATION_DEGREE))
-      ? (await (await edu.$(PROFILE_SELECTORS.EDUCATION_DEGREE))?.textContent())?.trim() || ""
-      : "";
+    const school = (await textOfFirst(edu, PROFILE_SELECTORS.EDUCATION_SCHOOL)) || "";
+    const degree = (await textOfFirst(edu, PROFILE_SELECTORS.EDUCATION_DEGREE)) || "";
 
     education.push({ school, degree });
   }
@@ -67,10 +80,17 @@ async function parseLeadProfile(): Promise<LeadProfile> {
     lastName: nameParts.slice(1).join(" ") || "",
     title: (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_TITLE)) || "",
     company: (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_COMPANY)) || "",
-    location: (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_LOCATION)) || "",
-    headline: (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_HEADLINE)) || undefined,
+    location:
+      topcard.location || (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_LOCATION)) || "",
+    headline:
+      topcard.headline ||
+      (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_HEADLINE)) ||
+      undefined,
     summary: (await nav.safeTextContent(PROFILE_SELECTORS.PROFILE_ABOUT)) || undefined,
-    connectionDegree: (await nav.safeTextContent(PROFILE_SELECTORS.CONNECTION_DEGREE)) || undefined,
+    connectionDegree:
+      topcard.connectionDegree ||
+      (await nav.safeTextContent(PROFILE_SELECTORS.CONNECTION_DEGREE)) ||
+      undefined,
     profilePictureUrl: (await nav.safeAttribute(PROFILE_SELECTORS.PROFILE_PHOTO, "src")) || undefined,
     salesNavUrl: page.url(),
     experience,
@@ -91,14 +111,19 @@ export function registerLeadTools(server: McpServer): void {
     "linkedin_get_lead_profile",
     "Get detailed profile information for a LinkedIn Sales Navigator lead",
     {
-      profileUrl: z
-        .string()
-        .describe("Sales Navigator profile URL (e.g., https://www.linkedin.com/sales/lead/...)"),
+      profileUrl: salesNavigatorUrlSchema.describe(
+        "Sales Navigator profile URL (e.g., https://www.linkedin.com/sales/lead/...)"
+      ),
     },
     async (params) => {
       try {
-        const nav = getNavigator();
+        // Non-consuming pre-check to fail fast before opening a browser.
+        await assertWithinBudget("profileViews");
+        // Reject off-site URLs before opening a browser connection.
+        assertSalesNavigatorUrl(params.profileUrl);
+        const nav = await ensureNavigator();
 
+        await consumeBudget("profileViews");
         // Navigate to the profile
         await nav.goToProfile(params.profileUrl);
 
@@ -114,6 +139,7 @@ export function registerLeadTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [
@@ -130,47 +156,78 @@ export function registerLeadTools(server: McpServer): void {
 
   server.tool(
     "linkedin_save_lead",
-    "Save a lead to a list on LinkedIn Sales Navigator",
+    "Save a lead to a list on LinkedIn Sales Navigator. " +
+      "Always preview first with dryRun=true before saving (default dryRun=false preserves prior behaviour).",
     {
-      profileUrl: z.string().describe("Sales Navigator profile URL of the lead to save"),
+      profileUrl: salesNavigatorUrlSchema.describe(
+        "Sales Navigator profile URL of the lead to save"
+      ),
       listName: z.string().optional().describe("Name of the list to save to (default: saved leads)"),
+      dryRun: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "If true, locate the save UI with human-like pacing but do not click Save (preview only). Prefer true before a real save."
+        ),
     },
     async (params) => {
       try {
-        const nav = getNavigator();
+        if (!params.dryRun) {
+          await assertWithinBudget("saves");
+        }
+        assertSalesNavigatorUrl(params.profileUrl);
+        const nav = await ensureNavigator();
         const page = nav.getPage();
 
         // Navigate to the profile
         await nav.goToProfile(params.profileUrl);
         await nav.humanDelay();
 
-        // Click the save button
-        const saveButton = await page.$(PROFILE_SELECTORS.SAVE_BUTTON);
+        // Click the save button. Its accessible name flips between
+        // "Save <name> as a lead..." and "Unsave <name>..." once saved,
+        // so check both up front rather than relying on one being absent.
+        const saveButton = await queryFirst(page, PROFILE_SELECTORS.SAVE_BUTTON);
+        const unsaveButton = await queryFirst(page, PROFILE_SELECTORS.UNSAVE_BUTTON);
+        if (unsaveButton) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ success: true, message: "Lead is already saved" }),
+              },
+            ],
+          };
+        }
         if (!saveButton) {
-          // Check if already saved
-          const unsaveButton = await page.$(PROFILE_SELECTORS.UNSAVE_BUTTON);
-          if (unsaveButton) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({ success: true, message: "Lead is already saved" }),
-                },
-              ],
-            };
-          }
           throw new Error("Save button not found on profile page");
         }
 
-        await saveButton.click();
-        await nav.humanDelay();
+        if (params.dryRun) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: true,
+                  dryRun: true,
+                  message:
+                    "Dry run - save button found but not clicked. Re-run with dryRun=false to save.",
+                  listName: params.listName ?? null,
+                }),
+              },
+            ],
+          };
+        }
+
+        await consumeBudget("saves");
+        await nav.clickAndSettle(saveButton, WAIT_CONDITIONS.BUTTON_STATE_SETTLE);
 
         // If a specific list is requested, handle list selection
         if (params.listName) {
-          const addToListBtn = await page.$(PROFILE_SELECTORS.ADD_TO_LIST_BUTTON);
+          const addToListBtn = await queryFirst(page, PROFILE_SELECTORS.ADD_TO_LIST_BUTTON);
           if (addToListBtn) {
-            await addToListBtn.click();
-            await nav.humanDelay();
+            await nav.clickAndSettle(addToListBtn, WAIT_CONDITIONS.BUTTON_STATE_SETTLE);
             // Type list name and select
             // This interaction depends on the list selection UI
           }
@@ -188,6 +245,7 @@ export function registerLeadTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [
