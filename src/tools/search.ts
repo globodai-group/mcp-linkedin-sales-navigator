@@ -31,8 +31,15 @@ async function parseSearchResults(): Promise<SearchResult> {
   const totalText = await nav.safeTextContent(SEARCH_SELECTORS.TOTAL_RESULTS);
   const totalResults = totalText ? parseInt(totalText.replace(/[^0-9]/g, ""), 10) || 0 : 0;
 
-  // Parse individual results
-  const resultElements = await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM);
+  // Parse individual results. Prefer rows inside the results container
+  // so filter/nav `li.artdeco-list__item` nodes are not treated as leads.
+  let resultElements = await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM_IN_CONTAINER);
+  if (resultElements.length === 0) {
+    const container = await queryFirst(page, SEARCH_SELECTORS.RESULTS_CONTAINER);
+    resultElements = container
+      ? await queryAll(container, SEARCH_SELECTORS.RESULT_ITEM)
+      : await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM);
+  }
   const leads: LeadProfile[] = [];
 
   for (const element of resultElements) {

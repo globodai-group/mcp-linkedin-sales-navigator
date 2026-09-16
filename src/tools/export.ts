@@ -30,12 +30,19 @@ async function collectLeadsFromPage(): Promise<LeadProfile[]> {
   const nav = await ensureNavigator();
   const page = nav.getPage();
 
-  const resultSelector =
-    page.url().includes("/search/")
-      ? SEARCH_SELECTORS.RESULT_ITEM
-      : LIST_SELECTORS.LIST_LEAD_ITEM;
-
-  const elements = await queryAll(page, resultSelector);
+  const onSearch = page.url().includes("/search/");
+  let elements;
+  if (onSearch) {
+    elements = await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM_IN_CONTAINER);
+    if (elements.length === 0) {
+      const container = await queryFirst(page, SEARCH_SELECTORS.RESULTS_CONTAINER);
+      elements = container
+        ? await queryAll(container, SEARCH_SELECTORS.RESULT_ITEM)
+        : await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM);
+    }
+  } else {
+    elements = await queryAll(page, LIST_SELECTORS.LIST_LEAD_ITEM);
+  }
   const leads: LeadProfile[] = [];
 
   for (const el of elements) {
