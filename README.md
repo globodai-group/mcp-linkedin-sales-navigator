@@ -110,6 +110,52 @@ Export your LinkedIn cookies and provide them as a JSON file:
 LSN_AUTH_METHOD=cookies LSN_COOKIES_PATH=/path/to/linkedin-cookies.json npx globodai-mcp-linkedin-sales-navigator
 ```
 
+## MCP client setup
+
+Use the same `command`, `args`, and `env` block in any MCP client. Replace paths and endpoints for your machine.
+
+### Claude Desktop
+
+Edit the config file:
+
+| OS | Path |
+|----|------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+Example entry:
+
+```json
+{
+  "mcpServers": {
+    "linkedin-sales-navigator": {
+      "command": "npx",
+      "args": ["-y", "globodai-mcp-linkedin-sales-navigator"],
+      "env": {
+        "LSN_AUTH_METHOD": "cdp",
+        "LSN_CDP_ENDPOINT": "http://localhost:9222"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving.
+
+### Claude Code
+
+From a shell (adjust env vars as needed):
+
+```bash
+claude mcp add linkedin-sales-navigator -- \
+  env LSN_AUTH_METHOD=cdp LSN_CDP_ENDPOINT=http://localhost:9222 \
+  npx -y globodai-mcp-linkedin-sales-navigator
+```
+
+### Generic MCP client
+
+Point the client at the package binary via `npx` or `node /path/to/mcp-linkedin-sales-navigator/dist/index.js`, stdio transport, with the environment variables from the table above.
+
 ## Clawdbot / CORTX Integration
 
 This MCP server is designed to work seamlessly with [Clawdbot](https://clawd.bot) browser relay:
