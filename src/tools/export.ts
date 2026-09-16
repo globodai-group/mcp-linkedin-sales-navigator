@@ -6,50 +6,72 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getNavigator } from "../browser/navigator.js";
+import { ensureNavigator } from "../browser/navigator.js";
+import { assertListId, listIdSchema } from "../browser/url.js";
 import {
   SEARCH_SELECTORS,
   LIST_SELECTORS,
   URLS,
   WAIT_CONDITIONS,
 } from "../browser/selectors.js";
+import {
+  queryAll,
+  queryFirst,
+  textOfFirst,
+  normalizeWhitespace,
+  stripSuffix,
+} from "../browser/query.js";
 import type { LeadProfile } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  consumeSearchPage,
+  paceIfConfigured,
+} from "../browser/rate-limit.js";
 
 /**
  * Collect leads from the current page (search results or list detail).
  */
 async function collectLeadsFromPage(): Promise<LeadProfile[]> {
-  const nav = getNavigator();
+  const nav = await ensureNavigator();
   const page = nav.getPage();
 
-  const resultSelector =
-    page.url().includes("/search/")
-      ? SEARCH_SELECTORS.RESULT_ITEM
-      : LIST_SELECTORS.LIST_LEAD_ITEM;
-
-  const elements = await page.$$(resultSelector);
+  const onSearch = page.url().includes("/search/");
+  let elements;
+  if (onSearch) {
+    elements = await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM_IN_CONTAINER);
+    if (elements.length === 0) {
+      const container = await queryFirst(page, SEARCH_SELECTORS.RESULTS_CONTAINER);
+      elements = container
+        ? await queryAll(container, SEARCH_SELECTORS.RESULT_ITEM)
+        : await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM);
+    }
+  } else {
+    elements = await queryAll(page, LIST_SELECTORS.LIST_LEAD_ITEM);
+  }
   const leads: LeadProfile[] = [];
 
   for (const el of elements) {
     try {
-      const nameEl = await el.$(SEARCH_SELECTORS.RESULT_NAME);
-      const titleEl = await el.$(SEARCH_SELECTORS.RESULT_TITLE);
-      const companyEl = await el.$(SEARCH_SELECTORS.RESULT_COMPANY);
-      const locationEl = await el.$(SEARCH_SELECTORS.RESULT_LOCATION);
-      const linkEl = await el.$(SEARCH_SELECTORS.RESULT_LINK);
+      const linkEl = await queryFirst(el, SEARCH_SELECTORS.RESULT_LINK);
 
-      const fullName = (await nameEl?.textContent())?.trim() || "Unknown";
+      const fullName = (await textOfFirst(el, SEARCH_SELECTORS.RESULT_NAME)) || "Unknown";
       const nameParts = fullName.split(" ");
       const profileLink = (await linkEl?.getAttribute("href")) || "";
+      const company = (await textOfFirst(el, SEARCH_SELECTORS.RESULT_COMPANY)) || "";
+      const title = (await textOfFirst(el, SEARCH_SELECTORS.RESULT_TITLE)) || "";
 
       leads.push({
         leadId: profileLink.match(/\/lead\/([^,/?]+)/)?.[1] || "",
         fullName,
         firstName: nameParts[0] || "",
         lastName: nameParts.slice(1).join(" ") || "",
-        title: (await titleEl?.textContent())?.trim() || "",
-        company: (await companyEl?.textContent())?.trim() || "",
-        location: (await locationEl?.textContent())?.trim() || "",
+        // Weaker title fallbacks can return the whole lockup subtitle,
+        // which appends the company and collapses to ragged whitespace.
+        title: normalizeWhitespace(stripSuffix(title, company)),
+        company,
+        location: (await textOfFirst(el, SEARCH_SELECTORS.RESULT_LOCATION)) || "",
         salesNavUrl: profileLink.startsWith("http")
           ? profileLink
           : `https://www.linkedin.com${profileLink}`,
@@ -66,11 +88,12 @@ async function collectLeadsFromPage(): Promise<LeadProfile[]> {
  * Collect leads across multiple pages.
  */
 async function collectLeadsMultiPage(limit: number): Promise<LeadProfile[]> {
-  const nav = getNavigator();
+  const nav = await ensureNavigator();
   const page = nav.getPage();
   const allLeads: LeadProfile[] = [];
 
   while (allLeads.length < limit) {
+    await consumeSearchPage();
     const pageLeads = await collectLeadsFromPage();
     allLeads.push(...pageLeads);
 
@@ -83,6 +106,7 @@ async function collectLeadsMultiPage(limit: number): Promise<LeadProfile[]> {
     const isDisabled = await nextButton.getAttribute("disabled");
     if (isDisabled !== null) break;
 
+    await paceIfConfigured();
     await nextButton.click();
     await page.waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
     await nav.waitForSelector(
@@ -140,8 +164,7 @@ export function registerExportTools(server: McpServer): void {
       source: z
         .enum(["current_search", "list"])
         .describe('Export from current search results ("current_search") or a specific list ("list")'),
-      listId: z
-        .string()
+      listId: listIdSchema
         .optional()
         .describe("List ID to export from (required if source is 'list')"),
       format: z
@@ -163,14 +186,22 @@ export function registerExportTools(server: McpServer): void {
     },
     async (params) => {
       try {
-        const nav = getNavigator();
-        const effectiveLimit = Math.min(params.limit, 250);
-
+        let listId: string | undefined;
         if (params.source === "list") {
           if (!params.listId) {
             throw new Error("listId is required when source is 'list'");
           }
-          await nav.navigateTo(`${URLS.LEAD_LISTS}/${params.listId}`);
+          listId = assertListId(params.listId);
+        }
+
+        await assertWithinBudget("searches");
+        const nav = await ensureNavigator();
+        const effectiveLimit = Math.min(params.limit, 250);
+
+        if (listId) {
+          await nav.navigateTo(
+            `${URLS.LEAD_LISTS}/${encodeURIComponent(listId)}`
+          );
           await nav
             .getPage()
             .waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
@@ -205,6 +236,7 @@ export function registerExportTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

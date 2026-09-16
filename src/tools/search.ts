@@ -6,15 +6,28 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getNavigator } from "../browser/navigator.js";
+import { ensureNavigator } from "../browser/navigator.js";
 import { SEARCH_SELECTORS, URLS, WAIT_CONDITIONS } from "../browser/selectors.js";
+import {
+  queryAll,
+  queryFirst,
+  textOfFirst,
+  normalizeWhitespace,
+  stripSuffix,
+} from "../browser/query.js";
 import type { LeadProfile, SearchResult } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  consumeBudget,
+} from "../browser/rate-limit.js";
 
 /**
  * Parse search results from the current page.
  */
 async function parseSearchResults(): Promise<SearchResult> {
-  const nav = getNavigator();
+  const nav = await ensureNavigator();
   const page = nav.getPage();
 
   // Wait for results to load
@@ -24,30 +37,37 @@ async function parseSearchResults(): Promise<SearchResult> {
   const totalText = await nav.safeTextContent(SEARCH_SELECTORS.TOTAL_RESULTS);
   const totalResults = totalText ? parseInt(totalText.replace(/[^0-9]/g, ""), 10) || 0 : 0;
 
-  // Parse individual results
-  const resultElements = await page.$$(SEARCH_SELECTORS.RESULT_ITEM);
+  // Parse individual results. Prefer rows inside the results container
+  // so filter/nav `li.artdeco-list__item` nodes are not treated as leads.
+  let resultElements = await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM_IN_CONTAINER);
+  if (resultElements.length === 0) {
+    const container = await queryFirst(page, SEARCH_SELECTORS.RESULTS_CONTAINER);
+    resultElements = container
+      ? await queryAll(container, SEARCH_SELECTORS.RESULT_ITEM)
+      : await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM);
+  }
   const leads: LeadProfile[] = [];
 
   for (const element of resultElements) {
     try {
-      const nameEl = await element.$(SEARCH_SELECTORS.RESULT_NAME);
-      const titleEl = await element.$(SEARCH_SELECTORS.RESULT_TITLE);
-      const companyEl = await element.$(SEARCH_SELECTORS.RESULT_COMPANY);
-      const locationEl = await element.$(SEARCH_SELECTORS.RESULT_LOCATION);
-      const linkEl = await element.$(SEARCH_SELECTORS.RESULT_LINK);
+      const linkEl = await queryFirst(element, SEARCH_SELECTORS.RESULT_LINK);
 
-      const fullName = (await nameEl?.textContent())?.trim() || "Unknown";
+      const fullName = (await textOfFirst(element, SEARCH_SELECTORS.RESULT_NAME)) || "Unknown";
       const nameParts = fullName.split(" ");
-      const profileLink = await linkEl?.getAttribute("href") || "";
+      const profileLink = (await linkEl?.getAttribute("href")) || "";
+      const company = (await textOfFirst(element, SEARCH_SELECTORS.RESULT_COMPANY)) || "";
+      const title = (await textOfFirst(element, SEARCH_SELECTORS.RESULT_TITLE)) || "";
 
       leads.push({
         leadId: extractLeadId(profileLink),
         fullName,
         firstName: nameParts[0] || "",
         lastName: nameParts.slice(1).join(" ") || "",
-        title: (await titleEl?.textContent())?.trim() || "",
-        company: (await companyEl?.textContent())?.trim() || "",
-        location: (await locationEl?.textContent())?.trim() || "",
+        // Weaker title fallbacks can return the whole lockup subtitle,
+        // which appends the company and collapses to ragged whitespace.
+        title: normalizeWhitespace(stripSuffix(title, company)),
+        company,
+        location: (await textOfFirst(element, SEARCH_SELECTORS.RESULT_LOCATION)) || "",
         salesNavUrl: profileLink.startsWith("http")
           ? profileLink
           : `https://www.linkedin.com${profileLink}`,
@@ -132,8 +152,10 @@ export function registerSearchTools(server: McpServer): void {
     },
     async (params) => {
       try {
-        const nav = getNavigator();
+        await assertWithinBudget("searches");
+        const nav = await ensureNavigator();
 
+        await consumeBudget("searches");
         // Build and navigate to search URL
         const searchUrl = buildSearchUrl(params);
         await nav.navigateTo(searchUrl);
@@ -151,6 +173,7 @@ export function registerSearchTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

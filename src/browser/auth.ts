@@ -12,10 +12,75 @@
 
 import { type Page, type BrowserContext } from "playwright";
 import { AUTH_SELECTORS, URLS, WAIT_CONDITIONS } from "./selectors.js";
+import { anyOf } from "./query.js";
+import {
+  isLinkedInAuthFailureUrl,
+  isSalesNavigatorUrl,
+} from "./url.js";
 import type { AuthConfig } from "../types/index.js";
 
+/** Combined presence check: header or profile icon, order does not matter. */
+const LOGGED_IN_MARKERS = anyOf([
+  AUTH_SELECTORS.SALES_NAV_HEADER,
+  AUTH_SELECTORS.PROFILE_ICON,
+]);
+
+/** Bound for the logged-in marker wait (one retry may add a short extra wait). */
+const AUTH_MARKER_TIMEOUT_MS = 15000;
+const AUTH_MARKER_RETRY_TIMEOUT_MS = 5000;
+
 /**
- * Check if the current page has an active LinkedIn Sales Navigator session.
+ * Check whether the current page (no navigation) shows an
+ * authenticated Sales Navigator session, without navigating away from
+ * wherever the page currently is.
+ */
+async function checkAuthIndicators(page: Page): Promise<boolean> {
+  // Fail fast: login / checkpoint / authwall means the session is dead.
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
+
+  const challenge = await page.$(AUTH_SELECTORS.CHALLENGE_PAGE).catch(() => null);
+  if (challenge) return false;
+
+  // Sales Navigator is an Ember SPA whose global nav can render several
+  // seconds after DOMContentLoaded. One combined wait covers any
+  // logged-in marker; a single extra wait handles a slow shell paint
+  // when the URL is still Sales Navigator (not an auth failure).
+  const found = await page
+    .waitForSelector(LOGGED_IN_MARKERS, { timeout: AUTH_MARKER_TIMEOUT_MS })
+    .catch(() => null);
+  if (found) return true;
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
+
+  // Still on Sales Navigator: wait once more for a slow SPA shell.
+  if (!isSalesNavigatorUrl(page.url())) return false;
+  const retry = await page
+    .waitForSelector(LOGGED_IN_MARKERS, {
+      timeout: AUTH_MARKER_RETRY_TIMEOUT_MS,
+    })
+    .catch(() => null);
+  return retry !== null;
+}
+
+/**
+ * Inspect the current page only. Never navigates.
+ *
+ * Returns false immediately on login/checkpoint/authwall or when the
+ * tab is not a Sales Navigator URL (so a google.com tab does not wait 15s).
+ */
+export async function inspectCurrentAuth(page: Page): Promise<boolean> {
+  const url = page.url();
+  if (isLinkedInAuthFailureUrl(url)) return false;
+  if (!isSalesNavigatorUrl(url)) return false;
+  return checkAuthIndicators(page);
+}
+
+/**
+ * Check if the current page has an active LinkedIn Sales Navigator
+ * session, navigating to the Sales Navigator home page first.
+ *
+ * Prefer `navigateToSalesNavigator()` when you also need the initial
+ * navigation - it reuses this same indicator check without triggering a
+ * second full-page reload of an already-loaded SPA page.
  */
 export async function isAuthenticated(page: Page): Promise<boolean> {
   try {
@@ -23,20 +88,7 @@ export async function isAuthenticated(page: Page): Promise<boolean> {
       waitUntil: "domcontentloaded",
       timeout: WAIT_CONDITIONS.PROFILE_LOAD_TIMEOUT,
     });
-
-    // Check for Sales Navigator header (indicates logged-in state)
-    const header = await page.$(AUTH_SELECTORS.SALES_NAV_HEADER);
-    if (header) return true;
-
-    // Check if we were redirected to login
-    const currentUrl = page.url();
-    if (currentUrl.includes("/login") || currentUrl.includes("/authwall")) {
-      return false;
-    }
-
-    // Check for profile icon as another indicator
-    const profileIcon = await page.$(AUTH_SELECTORS.PROFILE_ICON);
-    return profileIcon !== null;
+    return await checkAuthIndicators(page);
   } catch {
     return false;
   }
@@ -93,14 +145,17 @@ export async function waitForManualAuth(
  */
 export async function navigateToSalesNavigator(page: Page): Promise<boolean> {
   await page.goto(URLS.HOME, {
-    waitUntil: "networkidle",
+    waitUntil: "domcontentloaded",
     timeout: WAIT_CONDITIONS.SEARCH_RESULTS_TIMEOUT,
   });
 
-  // Wait for the page to settle
-  await page.waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
-
-  return isAuthenticated(page);
+  // Check indicators on the page we just loaded rather than calling
+  // `isAuthenticated()`, which would navigate to the same URL a second
+  // time (see issue #2). The combined marker wait covers SPA paint;
+  // skip networkidle + a fixed delay so an expired /sales/ session
+  // fails in ~15–20s instead of ~77s.
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
+  return checkAuthIndicators(page);
 }
 
 /**
