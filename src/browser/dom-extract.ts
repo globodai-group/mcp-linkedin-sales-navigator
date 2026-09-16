@@ -63,7 +63,7 @@ export function extractTopcardFieldsBrowser(): TopcardHeuristicResult {
         found = true;
         break;
       }
-      const parent = candidate.parentElement;
+      const parent: Element | null = candidate.parentElement;
       if (!parent || !boundary.contains(parent)) break;
       candidate = parent;
     }
