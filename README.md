@@ -27,6 +27,7 @@
 | `linkedin_create_lead_list` | Create a new lead list |
 | `linkedin_send_inmail` | Send an InMail message (with dry-run support) |
 | `linkedin_export_leads` | Export leads to JSON or CSV format |
+| `linkedin_session_status` | Check browser connection and Sales Navigator auth (call this first when debugging) |
 
 ## Quick Start
 
@@ -53,19 +54,19 @@ npm run build
 
 ### Configuration
 
-The server is configured via environment variables:
+The server is configured via environment variables (read in `src/index.ts`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LSN_AUTH_METHOD` | `cdp` | Authentication method: `cdp`, `session`, or `cookies` |
-| `LSN_CDP_ENDPOINT` | `http://localhost:9222` | Chrome DevTools Protocol endpoint |
-| `LSN_USER_DATA_DIR` | — | Path to Chrome user data directory (for `session` method) |
-| `LSN_COOKIES_PATH` | — | Path to cookies JSON file (for `cookies` method) |
-| `LSN_HEADLESS` | `false` | Run browser in headless mode |
-| `LSN_VIEWPORT_WIDTH` | `1280` | Browser viewport width |
-| `LSN_VIEWPORT_HEIGHT` | `900` | Browser viewport height |
-| `LSN_NAVIGATION_TIMEOUT` | `30000` | Navigation timeout in ms |
-| `LSN_ACTION_TIMEOUT` | `10000` | Action timeout in ms |
+| `LSN_AUTH_METHOD` | `cdp` | Auth mode: `cdp` (attach to running Chrome), `session` (Playwright + user data dir), or `cookies` (JSON cookie file) |
+| `LSN_CDP_ENDPOINT` | `http://localhost:9222` | CDP HTTP endpoint when `LSN_AUTH_METHOD=cdp` |
+| `LSN_COOKIES_PATH` | *(unset)* | Path to exported cookies JSON when `LSN_AUTH_METHOD=cookies` |
+| `LSN_USER_DATA_DIR` | *(unset)* | Chrome profile directory when `LSN_AUTH_METHOD=session` |
+| `LSN_HEADLESS` | `false` | Set to `true` to run Chromium headless (`session` / `cookies` modes) |
+| `LSN_NAVIGATION_TIMEOUT` | `30000` | Page navigation timeout (ms) |
+| `LSN_ACTION_TIMEOUT` | `10000` | Click/fill/wait timeout (ms) |
+| `LSN_VIEWPORT_WIDTH` | `1280` | Viewport width (px) |
+| `LSN_VIEWPORT_HEIGHT` | `900` | Viewport height (px) |
 
 ## Authentication Methods
 
