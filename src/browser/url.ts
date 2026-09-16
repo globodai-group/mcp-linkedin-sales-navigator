@@ -47,9 +47,17 @@ export function parseSalesNavigatorUrl(value: string): URL {
     );
   }
 
-  if (!SALES_NAV_HOSTS.has(parsed.hostname)) {
+  // Accept a trailing-dot FQDN (DNS root) and normalize for host checks.
+  const hostname = parsed.hostname.replace(/\.+$/, "");
+  if (!SALES_NAV_HOSTS.has(hostname)) {
     throw new InvalidSalesNavigatorUrlError(
       "URL hostname must be www.linkedin.com or linkedin.com"
+    );
+  }
+
+  if (parsed.port && parsed.port !== "443") {
+    throw new InvalidSalesNavigatorUrlError(
+      "URL must not include an explicit port other than 443"
     );
   }
 
