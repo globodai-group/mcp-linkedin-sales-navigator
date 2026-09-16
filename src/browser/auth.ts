@@ -26,7 +26,8 @@ const LOGGED_IN_MARKERS = anyOf([
 ]);
 
 /** Bound for the logged-in marker wait (one retry may add a short extra wait). */
-const AUTH_MARKER_TIMEOUT_MS = 8000;
+const AUTH_MARKER_TIMEOUT_MS = 15000;
+const AUTH_MARKER_RETRY_TIMEOUT_MS = 5000;
 
 /**
  * Check whether the current page (no navigation) shows an
@@ -40,21 +41,22 @@ async function checkAuthIndicators(page: Page): Promise<boolean> {
   const challenge = await page.$(AUTH_SELECTORS.CHALLENGE_PAGE).catch(() => null);
   if (challenge) return false;
 
-  // Sales Navigator is an Ember SPA whose global nav can render a few
+  // Sales Navigator is an Ember SPA whose global nav can render several
   // seconds after DOMContentLoaded. One combined wait covers any
-  // logged-in marker; a single retry handles a mid-check client-side
-  // navigation without stacking 10s waits per selector.
-  const urlBefore = page.url();
+  // logged-in marker; a single extra wait handles a slow shell paint
+  // when the URL is still Sales Navigator (not an auth failure).
   const found = await page
     .waitForSelector(LOGGED_IN_MARKERS, { timeout: AUTH_MARKER_TIMEOUT_MS })
     .catch(() => null);
   if (found) return true;
   if (isLinkedInAuthFailureUrl(page.url())) return false;
 
-  // At most one retry, and only if the document actually changed.
-  if (page.url() === urlBefore) return false;
+  // Still on Sales Navigator: wait once more for a slow SPA shell.
+  if (!isSalesNavigatorUrl(page.url())) return false;
   const retry = await page
-    .waitForSelector(LOGGED_IN_MARKERS, { timeout: 2000 })
+    .waitForSelector(LOGGED_IN_MARKERS, {
+      timeout: AUTH_MARKER_RETRY_TIMEOUT_MS,
+    })
     .catch(() => null);
   return retry !== null;
 }
