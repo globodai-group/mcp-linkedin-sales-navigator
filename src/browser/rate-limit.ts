@@ -7,7 +7,7 @@
  * only dates, category names, and counts — never URLs or lead data.
  */
 
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -162,7 +162,12 @@ export function createFileUsageStore(filePath: string): UsageStore {
     },
     async save(data: UsageData) {
       const dir = dirname(filePath);
-      await mkdir(dir, { recursive: true, mode: 0o700 });
+      try {
+        await stat(dir);
+      } catch {
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        await chmod(dir, 0o700);
+      }
       const clean = sanitizeUsageData(data);
       const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
       try {
