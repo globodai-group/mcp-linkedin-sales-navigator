@@ -138,32 +138,56 @@ export function parseConfig(env: NodeJS.ProcessEnv): {
 export function authFailureHint(auth: AuthConfig, cause?: unknown): string {
   const detail =
     cause instanceof Error ? cause.message : cause ? String(cause) : undefined;
+  const lower = (detail ?? "").toLowerCase();
+  const authFailed =
+    lower.includes("not authenticated") ||
+    lower.includes("logged out") ||
+    lower.includes("login") ||
+    lower.includes("authwall");
+
+  const suffix = [
+    detail && !authFailed ? `Detail: ${detail}` : undefined,
+    "Call linkedin_session_status to diagnose.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   switch (auth.method) {
     case "cdp":
+      if (authFailed) {
+        return [
+          "Connected via CDP but not authenticated to Sales Navigator.",
+          "Log into LinkedIn Sales Navigator in the Chrome instance exposed by LSN_CDP_ENDPOINT.",
+          "Call linkedin_session_status to diagnose.",
+        ].join(" ");
+      }
       return [
         `CDP endpoint unreachable${auth.cdpEndpoint ? ` (${auth.cdpEndpoint})` : ""}.`,
         "Check LSN_CDP_ENDPOINT and start Chrome with --remote-debugging-port.",
-        detail ? `Detail: ${detail}` : undefined,
-        "Call linkedin_session_status to diagnose.",
+        suffix,
       ]
         .filter(Boolean)
         .join(" ");
     case "cookies":
+      if (authFailed) {
+        return [
+          `Cookies loaded but session is not authenticated (li_at missing/expired)${auth.cookiesPath ? ` (${auth.cookiesPath})` : ""}.`,
+          "Check LSN_COOKIES_PATH and re-export a fresh cookies JSON.",
+          "Call linkedin_session_status to diagnose.",
+        ].join(" ");
+      }
       return [
-        `Cookies file missing, invalid, or expired li_at${auth.cookiesPath ? ` (${auth.cookiesPath})` : ""}.`,
-        "Check LSN_COOKIES_PATH.",
-        detail ? `Detail: ${detail}` : undefined,
-        "Call linkedin_session_status to diagnose.",
+        `Cookies file missing or invalid${auth.cookiesPath ? ` (${auth.cookiesPath})` : ""}.`,
+        "Check LSN_COOKIES_PATH for a valid JSON cookie array including li_at.",
+        suffix,
       ]
         .filter(Boolean)
         .join(" ");
     case "session":
       return [
         `User data dir not logged in to Sales Navigator${auth.userDataDir ? ` (${auth.userDataDir})` : ""}.`,
-        "Check LSN_USER_DATA_DIR.",
-        detail ? `Detail: ${detail}` : undefined,
-        "Call linkedin_session_status to diagnose.",
+        "Check LSN_USER_DATA_DIR points at a Chrome profile already signed into Sales Navigator.",
+        suffix,
       ]
         .filter(Boolean)
         .join(" ");
@@ -171,8 +195,7 @@ export function authFailureHint(auth: AuthConfig, cause?: unknown): string {
       return [
         "Browser connection or authentication failed.",
         "Check LSN_AUTH_METHOD and related LSN_* variables.",
-        detail ? `Detail: ${detail}` : undefined,
-        "Call linkedin_session_status to diagnose.",
+        suffix,
       ]
         .filter(Boolean)
         .join(" ");
