@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `linkedin_session_status` tool for lazy connection checks and actionable diagnostics
+- Conservative daily usage budgets and action pacing (`LSN_DAILY_*`, `LSN_MIN_ACTION_INTERVAL_MS`)
 - Startup configuration validation
 - Unit tests
 - Issue and pull request templates

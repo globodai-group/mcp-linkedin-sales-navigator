@@ -27,7 +27,7 @@
 | `linkedin_create_lead_list` | Create a new lead list |
 | `linkedin_send_inmail` | Send an InMail message (with dry-run support) |
 | `linkedin_export_leads` | Export leads to JSON or CSV format |
-| `linkedin_session_status` | Check browser connection and Sales Navigator auth (call this first when debugging) |
+| `linkedin_session_status` | Check browser connection, Sales Navigator auth, and today's usage budgets (call this first when debugging) |
 
 ## Quick Start
 
@@ -67,6 +67,28 @@ The server is configured via environment variables (read in `src/index.ts`):
 | `LSN_ACTION_TIMEOUT` | `10000` | Click/fill/wait timeout (ms) |
 | `LSN_VIEWPORT_WIDTH` | `1280` | Viewport width (px) |
 | `LSN_VIEWPORT_HEIGHT` | `900` | Viewport height (px) |
+| `LSN_DAILY_PROFILE_VIEWS` | `80` | Daily cap for `linkedin_get_lead_profile`. `0` = unlimited |
+| `LSN_DAILY_SEARCHES` | `30` | Daily cap for `linkedin_search_leads`, plus each results page fetched by `linkedin_export_leads`. `0` = unlimited |
+| `LSN_DAILY_SAVES` | `50` | Daily cap for `linkedin_save_lead` + `linkedin_create_lead_list`. `0` = unlimited |
+| `LSN_DAILY_INMAILS` | `15` | Daily cap for `linkedin_send_inmail` sends (dry runs do not count). `0` = unlimited |
+| `LSN_MIN_ACTION_INTERVAL_MS` | `4000` | Minimum delay between page navigations/actions, plus 0–50% random jitter |
+| `LSN_USAGE_FILE` | `~/.mcp-linkedin-sales-navigator/usage.json` | Local JSON file for daily counters (dates and counts only) |
+
+## Rate limits and account safety
+
+This server throttles **your own** Sales Navigator activity so a Claude session does not fire actions back-to-back. It is not anti-detection: there is no fingerprint spoofing, user-agent rotation, or proxy support.
+
+| Budget | Default | What counts |
+|--------|---------|-------------|
+| Profile views | 80 / local day | Each `linkedin_get_lead_profile` call |
+| Searches | 30 / local day | Each `linkedin_search_leads` call, and each results page fetched by `linkedin_export_leads` |
+| Saves | 50 / local day | `linkedin_save_lead` (real save) and `linkedin_create_lead_list` |
+| InMails | 15 / local day | `linkedin_send_inmail` calls that actually send. Dry runs do not count |
+| Action pacing | 4000 ms + 0–50% jitter | Minimum gap between navigations/actions across all tools |
+
+`0` on a daily budget means unlimited. Raise a cap by setting the matching `LSN_DAILY_*` variable; check `usageToday` on `linkedin_session_status` for used / cap / remaining. Counters reset at the next local midnight and live in `LSN_USAGE_FILE` (or `~/.mcp-linkedin-sales-navigator/usage.json`). That file stores only dates, category names, and counts.
+
+LinkedIn does not publish official automation limits and restricts automated activity in its User Agreement. **No tool can guarantee an account will not be restricted.** Start with the defaults, spread activity over working hours, and stay within your Sales Navigator InMail credits.
 
 ## Authentication Methods
 
@@ -239,7 +261,7 @@ When using Clawdbot's browser relay, the AI assistant can directly control a bro
 
 ## Troubleshooting
 
-Start with the `linkedin_session_status` tool. It connects lazily (same as other tools), reports `authMethod`, `connected`, `authenticated`, and a short hint for the next step.
+Start with the `linkedin_session_status` tool. It connects lazily (same as other tools), reports `authMethod`, `connected`, `authenticated`, `usageToday`, and a short hint for the next step.
 
 | Symptom | What to check |
 |---------|----------------|
