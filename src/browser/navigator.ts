@@ -23,6 +23,7 @@ import {
   isSalesNavigatorUrl,
 } from "./url.js";
 import { readFile } from "node:fs/promises";
+import { isRateLimitConfigured, paceIfConfigured } from "./rate-limit.js";
 
 export class SalesNavigator {
   private browser: Browser | null = null;
@@ -322,6 +323,7 @@ export class SalesNavigator {
    * Navigate to a Sales Navigator URL.
    */
   async navigateTo(url: string): Promise<void> {
+    await paceIfConfigured();
     const safeUrl = assertSalesNavigatorUrl(url);
     const page = this.getPage();
     await page.goto(safeUrl, { waitUntil: "domcontentloaded" });
@@ -329,7 +331,10 @@ export class SalesNavigator {
       this.resetAuthVerified();
       this.throwNotAuthenticated();
     }
-    await this.humanDelay();
+    await this.humanDelay(
+      WAIT_CONDITIONS.MIN_HUMAN_DELAY,
+      WAIT_CONDITIONS.MAX_HUMAN_DELAY
+    );
   }
 
   /**
@@ -341,14 +346,18 @@ export class SalesNavigator {
   }
 
   /**
-   * Add a random human-like delay between actions.
-   * Helps avoid detection and rate limiting.
+   * Space actions. Default (no args) enforces LSN_MIN_ACTION_INTERVAL_MS
+   * plus 0–50% jitter when the usage limiter is configured. Explicit
+   * min/max keep a short in-page delay and do not apply the interval.
    */
-  async humanDelay(
-    min: number = WAIT_CONDITIONS.MIN_HUMAN_DELAY,
-    max: number = WAIT_CONDITIONS.MAX_HUMAN_DELAY
-  ): Promise<void> {
-    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+  async humanDelay(min?: number, max?: number): Promise<void> {
+    if (min === undefined && max === undefined) {
+      await paceIfConfigured();
+      if (isRateLimitConfigured()) return;
+    }
+    const lo = min ?? WAIT_CONDITIONS.MIN_HUMAN_DELAY;
+    const hi = max ?? WAIT_CONDITIONS.MAX_HUMAN_DELAY;
+    const delay = Math.floor(Math.random() * (hi - lo + 1)) + lo;
     await this.getPage().waitForTimeout(delay);
   }
 

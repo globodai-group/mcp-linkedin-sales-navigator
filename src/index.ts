@@ -19,6 +19,7 @@ import { registerListTools } from "./tools/lists.js";
 import { registerExportTools } from "./tools/export.js";
 import { registerSessionTools } from "./tools/session.js";
 import { configureNavigator, ensureAttached, closeNavigator } from "./browser/navigator.js";
+import { configureRateLimit } from "./browser/rate-limit.js";
 import { parseConfig } from "./config.js";
 
 const require = createRequire(import.meta.url);
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
   // Make the browser config available to the lazy connection path, so a
   // tool arriving before (or after a failed) startup connection can still
   // connect on its own.
+  configureRateLimit(config.usage);
   configureNavigator(config.browser, config.auth);
 
   // Graceful shutdown
