@@ -9,10 +9,34 @@ import type { AuthConfig, BrowserConfig } from "./types/index.js";
 
 export type AuthMethod = AuthConfig["method"];
 
+export interface UsageConfig {
+  /** Daily cap for linkedin_get_lead_profile. 0 = unlimited. */
+  dailyProfileViews: number;
+  /** Daily cap for searches (linkedin_search_leads + each export page). 0 = unlimited. */
+  dailySearches: number;
+  /** Daily cap for linkedin_save_lead + linkedin_create_lead_list. 0 = unlimited. */
+  dailySaves: number;
+  /** Daily cap for real linkedin_send_inmail sends. 0 = unlimited. */
+  dailyInmails: number;
+  /** Minimum delay between navigations/actions, plus 0–50% jitter. */
+  minActionIntervalMs: number;
+  /** Optional override for the usage JSON path. */
+  usageFile?: string;
+}
+
 export interface LsnConfig {
   auth: AuthConfig;
   browser: BrowserConfig;
+  usage: UsageConfig;
 }
+
+export const DEFAULT_USAGE: UsageConfig = {
+  dailyProfileViews: 80,
+  dailySearches: 30,
+  dailySaves: 50,
+  dailyInmails: 15,
+  minActionIntervalMs: 4000,
+};
 
 const AUTH_METHODS: readonly AuthMethod[] = ["cdp", "cookies", "session"];
 
@@ -52,6 +76,26 @@ function parsePositiveInt(
   }
   if (value <= 0) {
     errors.push(`${envName} must be a positive number (got ${value})`);
+    return fallback;
+  }
+  return value;
+}
+
+/** Non-negative integer. `0` is valid (unlimited budget or no pacing). */
+function parseNonNegativeInt(
+  raw: string | undefined,
+  envName: string,
+  fallback: number,
+  errors: string[]
+): number {
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || Number.isNaN(value)) {
+    errors.push(`${envName} must be a number (got ${JSON.stringify(raw)})`);
+    return fallback;
+  }
+  if (value < 0) {
+    errors.push(`${envName} must be a non-negative integer (got ${value})`);
     return fallback;
   }
   return value;
@@ -137,7 +181,43 @@ export function parseConfig(env: NodeJS.ProcessEnv): {
     ),
   };
 
-  return { config: { auth, browser }, errors };
+  const usageFile = env.LSN_USAGE_FILE?.trim() || undefined;
+
+  const usage: UsageConfig = {
+    dailyProfileViews: parseNonNegativeInt(
+      env.LSN_DAILY_PROFILE_VIEWS,
+      "LSN_DAILY_PROFILE_VIEWS",
+      DEFAULT_USAGE.dailyProfileViews,
+      errors
+    ),
+    dailySearches: parseNonNegativeInt(
+      env.LSN_DAILY_SEARCHES,
+      "LSN_DAILY_SEARCHES",
+      DEFAULT_USAGE.dailySearches,
+      errors
+    ),
+    dailySaves: parseNonNegativeInt(
+      env.LSN_DAILY_SAVES,
+      "LSN_DAILY_SAVES",
+      DEFAULT_USAGE.dailySaves,
+      errors
+    ),
+    dailyInmails: parseNonNegativeInt(
+      env.LSN_DAILY_INMAILS,
+      "LSN_DAILY_INMAILS",
+      DEFAULT_USAGE.dailyInmails,
+      errors
+    ),
+    minActionIntervalMs: parseNonNegativeInt(
+      env.LSN_MIN_ACTION_INTERVAL_MS,
+      "LSN_MIN_ACTION_INTERVAL_MS",
+      DEFAULT_USAGE.minActionIntervalMs,
+      errors
+    ),
+    usageFile,
+  };
+
+  return { config: { auth, browser, usage }, errors };
 }
 
 /**
