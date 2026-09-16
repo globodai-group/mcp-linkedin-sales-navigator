@@ -145,7 +145,10 @@ export function registerInMailTools(server: McpServer): void {
         const remainingCredits = creditsMatch ? parseInt(creditsMatch[creditsMatch.length - 1], 10) : undefined;
 
         const result: InMailResult = {
-          success: composeGone || !!successEl || !errorEl,
+          // Modal closed or explicit success toast. Do not treat a missing
+          // error node as success - compose may still be open after a
+          // silent failure (and errorEl is always null on this path).
+          success: composeGone || !!successEl,
           remainingCredits,
         };
 
