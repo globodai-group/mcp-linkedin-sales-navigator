@@ -1,6 +1,6 @@
 {
   "name": "globodai-mcp-linkedin-sales-navigator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for LinkedIn Sales Navigator - Browser automation via Clawdbot/Playwright",
   "author": "GlobodAI Group <dev@globodai.com>",
   "license": "MIT",
