@@ -16,7 +16,7 @@ import { registerLeadTools } from "./tools/leads.js";
 import { registerInMailTools } from "./tools/inmails.js";
 import { registerListTools } from "./tools/lists.js";
 import { registerExportTools } from "./tools/export.js";
-import { initializeNavigator, closeNavigator } from "./browser/navigator.js";
+import { configureNavigator, ensureNavigator, closeNavigator } from "./browser/navigator.js";
 import type { AuthConfig, BrowserConfig } from "./types/index.js";
 
 /**
@@ -67,28 +67,10 @@ async function main(): Promise<void> {
   registerListTools(server);
   registerExportTools(server);
 
-  // Initialize browser connection
-  // This is done lazily on first tool call to avoid blocking server startup
-  let browserInitialized = false;
-
-  const originalConnect = server.connect.bind(server);
-  server.connect = async (transport) => {
-    await originalConnect(transport);
-
-    // Try to connect to browser in background
-    if (!browserInitialized) {
-      try {
-        await initializeNavigator(config.browser, config.auth);
-        browserInitialized = true;
-        console.error("[LSN] Browser connected and authenticated");
-      } catch (error) {
-        console.error(
-          "[LSN] Browser not connected at startup. Tools will attempt connection on first use.",
-          error instanceof Error ? error.message : error
-        );
-      }
-    }
-  };
+  // Make the browser config available to the lazy connection path, so a
+  // tool arriving before (or after a failed) startup connection can still
+  // connect on its own.
+  configureNavigator(config.browser, config.auth);
 
   // Graceful shutdown
   const shutdown = async () => {
@@ -105,6 +87,18 @@ async function main(): Promise<void> {
   await server.connect(transport);
 
   console.error("[LSN] LinkedIn Sales Navigator MCP server started");
+
+  // Warm the browser connection in the background. Failure here is not
+  // fatal - the browser may simply not be running yet, and each tool
+  // connects on demand via ensureNavigator().
+  ensureNavigator().then(
+    () => console.error("[LSN] Browser connected and authenticated"),
+    (error: unknown) =>
+      console.error(
+        "[LSN] Browser not connected at startup; tools will connect on first use:",
+        error instanceof Error ? error.message : error
+      )
+  );
 }
 
 main().catch((error) => {

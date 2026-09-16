@@ -15,7 +15,61 @@ import { AUTH_SELECTORS, URLS, WAIT_CONDITIONS } from "./selectors.js";
 import type { AuthConfig } from "../types/index.js";
 
 /**
- * Check if the current page has an active LinkedIn Sales Navigator session.
+ * Check whether the current page (no navigation) shows an
+ * authenticated Sales Navigator session, without navigating away from
+ * wherever the page currently is.
+ */
+async function checkAuthIndicators(page: Page): Promise<boolean> {
+  // Sales Navigator is an Ember SPA whose global nav renders several
+  // seconds *after* the page reaches `networkidle` (measured ~4s on a
+  // live session). The previous implementation probed with an instant
+  // `page.$()` at that point, so it consistently found nothing and
+  // reported an authenticated session as logged-out - the tools then
+  // refused to start at all (issue #2).
+  //
+  // `waitForSelector` is the actual fix. The retry loop on top covers
+  // the SPA performing a further client-side navigation mid-check,
+  // which would otherwise reject the pending wait.
+  const ATTEMPTS = 3;
+
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    // Redirected to login/authwall - conclusive, no point retrying.
+    const currentUrl = page.url();
+    if (currentUrl.includes("/login") || currentUrl.includes("/authwall")) {
+      return false;
+    }
+
+    // A logged-in session shows either the global nav header or the
+    // profile icon. `waitForSelector` (rather than an instant
+    // `page.$()`) also covers the case where the SPA simply hasn't
+    // rendered them yet.
+    for (const selector of [
+      AUTH_SELECTORS.SALES_NAV_HEADER,
+      AUTH_SELECTORS.PROFILE_ICON,
+    ]) {
+      const found = await page
+        .waitForSelector(selector, {
+          timeout: WAIT_CONDITIONS.PROFILE_LOAD_TIMEOUT,
+        })
+        .catch(() => null);
+      if (found) return true;
+    }
+
+    // Nothing found - let any in-flight client-side navigation settle
+    // before trying once more.
+    await page.waitForTimeout(WAIT_CONDITIONS.ACTION_DELAY).catch(() => {});
+  }
+
+  return false;
+}
+
+/**
+ * Check if the current page has an active LinkedIn Sales Navigator
+ * session, navigating to the Sales Navigator home page first.
+ *
+ * Prefer `navigateToSalesNavigator()` when you also need the initial
+ * navigation - it reuses this same indicator check without triggering a
+ * second full-page reload of an already-loaded SPA page.
  */
 export async function isAuthenticated(page: Page): Promise<boolean> {
   try {
@@ -23,20 +77,7 @@ export async function isAuthenticated(page: Page): Promise<boolean> {
       waitUntil: "domcontentloaded",
       timeout: WAIT_CONDITIONS.PROFILE_LOAD_TIMEOUT,
     });
-
-    // Check for Sales Navigator header (indicates logged-in state)
-    const header = await page.$(AUTH_SELECTORS.SALES_NAV_HEADER);
-    if (header) return true;
-
-    // Check if we were redirected to login
-    const currentUrl = page.url();
-    if (currentUrl.includes("/login") || currentUrl.includes("/authwall")) {
-      return false;
-    }
-
-    // Check for profile icon as another indicator
-    const profileIcon = await page.$(AUTH_SELECTORS.PROFILE_ICON);
-    return profileIcon !== null;
+    return await checkAuthIndicators(page);
   } catch {
     return false;
   }
@@ -100,7 +141,10 @@ export async function navigateToSalesNavigator(page: Page): Promise<boolean> {
   // Wait for the page to settle
   await page.waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
 
-  return isAuthenticated(page);
+  // Check indicators on the page we just loaded rather than calling
+  // `isAuthenticated()`, which would navigate to the same URL a second
+  // time (see issue #2).
+  return checkAuthIndicators(page);
 }
 
 /**

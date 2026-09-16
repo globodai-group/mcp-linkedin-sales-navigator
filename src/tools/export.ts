@@ -6,20 +6,27 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getNavigator } from "../browser/navigator.js";
+import { ensureNavigator } from "../browser/navigator.js";
 import {
   SEARCH_SELECTORS,
   LIST_SELECTORS,
   URLS,
   WAIT_CONDITIONS,
 } from "../browser/selectors.js";
+import {
+  queryAll,
+  queryFirst,
+  textOfFirst,
+  normalizeWhitespace,
+  stripSuffix,
+} from "../browser/query.js";
 import type { LeadProfile } from "../types/index.js";
 
 /**
  * Collect leads from the current page (search results or list detail).
  */
 async function collectLeadsFromPage(): Promise<LeadProfile[]> {
-  const nav = getNavigator();
+  const nav = await ensureNavigator();
   const page = nav.getPage();
 
   const resultSelector =
@@ -27,29 +34,29 @@ async function collectLeadsFromPage(): Promise<LeadProfile[]> {
       ? SEARCH_SELECTORS.RESULT_ITEM
       : LIST_SELECTORS.LIST_LEAD_ITEM;
 
-  const elements = await page.$$(resultSelector);
+  const elements = await queryAll(page, resultSelector);
   const leads: LeadProfile[] = [];
 
   for (const el of elements) {
     try {
-      const nameEl = await el.$(SEARCH_SELECTORS.RESULT_NAME);
-      const titleEl = await el.$(SEARCH_SELECTORS.RESULT_TITLE);
-      const companyEl = await el.$(SEARCH_SELECTORS.RESULT_COMPANY);
-      const locationEl = await el.$(SEARCH_SELECTORS.RESULT_LOCATION);
-      const linkEl = await el.$(SEARCH_SELECTORS.RESULT_LINK);
+      const linkEl = await queryFirst(el, SEARCH_SELECTORS.RESULT_LINK);
 
-      const fullName = (await nameEl?.textContent())?.trim() || "Unknown";
+      const fullName = (await textOfFirst(el, SEARCH_SELECTORS.RESULT_NAME)) || "Unknown";
       const nameParts = fullName.split(" ");
       const profileLink = (await linkEl?.getAttribute("href")) || "";
+      const company = (await textOfFirst(el, SEARCH_SELECTORS.RESULT_COMPANY)) || "";
+      const title = (await textOfFirst(el, SEARCH_SELECTORS.RESULT_TITLE)) || "";
 
       leads.push({
         leadId: profileLink.match(/\/lead\/([^,/?]+)/)?.[1] || "",
         fullName,
         firstName: nameParts[0] || "",
         lastName: nameParts.slice(1).join(" ") || "",
-        title: (await titleEl?.textContent())?.trim() || "",
-        company: (await companyEl?.textContent())?.trim() || "",
-        location: (await locationEl?.textContent())?.trim() || "",
+        // Weaker title fallbacks can return the whole lockup subtitle,
+        // which appends the company and collapses to ragged whitespace.
+        title: normalizeWhitespace(stripSuffix(title, company)),
+        company,
+        location: (await textOfFirst(el, SEARCH_SELECTORS.RESULT_LOCATION)) || "",
         salesNavUrl: profileLink.startsWith("http")
           ? profileLink
           : `https://www.linkedin.com${profileLink}`,
@@ -66,7 +73,7 @@ async function collectLeadsFromPage(): Promise<LeadProfile[]> {
  * Collect leads across multiple pages.
  */
 async function collectLeadsMultiPage(limit: number): Promise<LeadProfile[]> {
-  const nav = getNavigator();
+  const nav = await ensureNavigator();
   const page = nav.getPage();
   const allLeads: LeadProfile[] = [];
 
@@ -163,7 +170,7 @@ export function registerExportTools(server: McpServer): void {
     },
     async (params) => {
       try {
-        const nav = getNavigator();
+        const nav = await ensureNavigator();
         const effectiveLimit = Math.min(params.limit, 250);
 
         if (params.source === "list") {
