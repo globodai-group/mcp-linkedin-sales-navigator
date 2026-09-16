@@ -588,6 +588,7 @@ export function withSingleFlight<T>(
  */
 export async function ensureAttached(): Promise<SalesNavigator> {
   if (navigatorInstance && navigatorReady) return navigatorInstance;
+  if (pendingInit) return pendingInit;
 
   if (!storedConfig) {
     throw new Error(
