@@ -588,7 +588,6 @@ export function withSingleFlight<T>(
  */
 export async function ensureAttached(): Promise<SalesNavigator> {
   if (navigatorInstance && navigatorReady) return navigatorInstance;
-  if (pendingInit) return pendingInit;
 
   if (!storedConfig) {
     throw new Error(
@@ -598,52 +597,44 @@ export async function ensureAttached(): Promise<SalesNavigator> {
   }
 
   const { browser, auth } = storedConfig;
-
-  // Assign pendingInit synchronously before any await so concurrent
-  // reconnects share one attempt instead of overwriting each other.
-  let resolveInit!: (nav: SalesNavigator) => void;
-  let rejectInit!: (reason?: unknown) => void;
-  const initPromise = new Promise<SalesNavigator>((resolve, reject) => {
-    resolveInit = resolve;
-    rejectInit = reject;
-  });
-  pendingInit = initPromise;
-
-  void (async () => {
-    const nav = new SalesNavigator(browser);
-    nav.setSessionLostHandler(() => {
-      nav.resetAuthVerified();
-      if (navigatorInstance === nav) {
-        navigatorInstance = null;
-        navigatorReady = false;
-      }
-      void nav.close().catch(() => {});
-    });
-    try {
-      await nav.initialize(auth);
-      navigatorInstance = nav;
-      navigatorReady = true;
-      if (!nav.isBrowserAttached()) {
-        navigatorInstance = null;
-        navigatorReady = false;
-        await nav.close().catch(() => {});
-        throw new Error("Browser disconnected during initialization");
-      }
-      resolveInit(nav);
-    } catch (error) {
-      // initialize() also closes, but a throw before that catch (or a
-      // future edit that drops it) must not leak a CDP connection.
-      await nav.close().catch(() => {});
-      rejectInit(error);
-    } finally {
-      if (pendingInit === initPromise) {
-        pendingInit = null;
-      }
-    }
-  })();
+  const flight = {
+    get current() {
+      return pendingInit;
+    },
+    set current(value: Promise<SalesNavigator> | null) {
+      pendingInit = value;
+    },
+  };
 
   try {
-    return await initPromise;
+    return await withSingleFlight(flight, async () => {
+      const nav = new SalesNavigator(browser);
+      nav.setSessionLostHandler(() => {
+        nav.resetAuthVerified();
+        if (navigatorInstance === nav) {
+          navigatorInstance = null;
+          navigatorReady = false;
+        }
+        void nav.close().catch(() => {});
+      });
+      try {
+        await nav.initialize(auth);
+        navigatorInstance = nav;
+        navigatorReady = true;
+        if (!nav.isBrowserAttached()) {
+          navigatorInstance = null;
+          navigatorReady = false;
+          await nav.close().catch(() => {});
+          throw new Error("Browser disconnected during initialization");
+        }
+        return nav;
+      } catch (error) {
+        // initialize() also closes, but a throw before that catch (or a
+        // future edit that drops it) must not leak a CDP connection.
+        await nav.close().catch(() => {});
+        throw error;
+      }
+    });
   } catch (error) {
     // initialize() already wraps with authFailureHint; rethrow as-is
     // unless somehow bare.
