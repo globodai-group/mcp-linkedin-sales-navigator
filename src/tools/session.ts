@@ -69,15 +69,13 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    // initialize()/ensureNavigator already embed actionable hints
+    const alreadyHinted = message.includes("linkedin_session_status");
     return {
       authMethod,
       browserConnected: false,
       authenticated: false,
-      hint: message.includes("linkedin_session_status")
-        ? message
-        : authFailureHint(stored.auth, error),
-      error: message,
+      hint: alreadyHinted ? message : authFailureHint(stored.auth, error),
+      error: alreadyHinted ? "connection_failed" : message,
     };
   }
 }

@@ -16,6 +16,14 @@ export interface LsnConfig {
 
 const AUTH_METHODS: readonly AuthMethod[] = ["cdp", "cookies", "session"];
 
+/** First line of an error only (Playwright appends multi-line Call logs). */
+function summarizeCause(cause?: unknown): string | undefined {
+  if (cause === undefined || cause === null) return undefined;
+  const raw = cause instanceof Error ? cause.message : String(cause);
+  const first = raw.split("\n")[0]?.trim();
+  return first || undefined;
+}
+
 function parseBoolean(
   raw: string | undefined,
   envName: string,
@@ -136,13 +144,11 @@ export function parseConfig(env: NodeJS.ProcessEnv): {
  * Actionable hint for a connection/auth failure, keyed by auth method.
  */
 export function authFailureHint(auth: AuthConfig, cause?: unknown): string {
-  const detail =
-    cause instanceof Error ? cause.message : cause ? String(cause) : undefined;
+  const detail = summarizeCause(cause);
   const lower = (detail ?? "").toLowerCase();
   const authFailed =
     lower.includes("not authenticated") ||
     lower.includes("logged out") ||
-    lower.includes("login") ||
     lower.includes("authwall");
 
   const suffix = [
