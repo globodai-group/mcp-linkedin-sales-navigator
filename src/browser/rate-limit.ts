@@ -331,7 +331,11 @@ export class UsageLimiter {
     });
   }
 
-  async recordAttempt(category: UsageCategory): Promise<void> {
+  /**
+   * Atomically check the daily cap and increment. Use when the action is
+   * committed (after auth, immediately before the browser side-effect).
+   */
+  async consumeBudget(category: UsageCategory): Promise<void> {
     await this.runSerialized(async () => {
       const { date, counts } = await this.todayCounts();
       const used = counts[category] ?? 0;
@@ -341,9 +345,13 @@ export class UsageLimiter {
     });
   }
 
+  async recordAttempt(category: UsageCategory): Promise<void> {
+    await this.consumeBudget(category);
+  }
+
   async recordInMailAttempt(dryRun: boolean): Promise<void> {
     if (dryRun) return;
-    await this.recordAttempt("inmails");
+    await this.consumeBudget("inmails");
   }
 
   async getUsageToday(): Promise<UsageToday> {
@@ -440,6 +448,10 @@ export async function assertWithinBudget(category: UsageCategory): Promise<void>
   await getUsageLimiter().assertWithinBudget(category);
 }
 
+export async function consumeBudget(category: UsageCategory): Promise<void> {
+  await getUsageLimiter().consumeBudget(category);
+}
+
 export async function recordAttempt(category: UsageCategory): Promise<void> {
   await getUsageLimiter().recordAttempt(category);
 }
@@ -449,7 +461,7 @@ export async function recordInMailAttempt(dryRun: boolean): Promise<void> {
 }
 
 export async function consumeSearchPage(): Promise<void> {
-  await getUsageLimiter().recordAttempt("searches");
+  await getUsageLimiter().consumeBudget("searches");
 }
 
 export async function readUsageToday(): Promise<UsageToday> {
