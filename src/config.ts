@@ -127,14 +127,12 @@ export function parseConfig(env: NodeJS.ProcessEnv): {
   }
 
   const cookiesPath = env.LSN_COOKIES_PATH?.trim() || undefined;
-  const cdpEndpoint = env.LSN_CDP_ENDPOINT?.trim() || undefined;
+  // Backward-compatible default (same as 0.1.x / README).
+  const cdpEndpoint =
+    env.LSN_CDP_ENDPOINT?.trim() ||
+    (method === "cdp" ? "http://localhost:9222" : undefined);
   const userDataDir = env.LSN_USER_DATA_DIR?.trim() || undefined;
 
-  if (method === "cdp" && !cdpEndpoint) {
-    errors.push(
-      'LSN_CDP_ENDPOINT is required when LSN_AUTH_METHOD is "cdp" (e.g. http://localhost:9222)'
-    );
-  }
   if (method === "cookies" && !cookiesPath) {
     errors.push(
       'LSN_COOKIES_PATH is required when LSN_AUTH_METHOD is "cookies"'

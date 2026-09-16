@@ -16,7 +16,7 @@ import {
   assertWithinBudget,
   budgetErrorResult,
   BudgetExceededError,
-  recordAttempt,
+  consumeBudget,
 } from "../browser/rate-limit.js";
 
 /**
@@ -117,12 +117,13 @@ export function registerLeadTools(server: McpServer): void {
     },
     async (params) => {
       try {
+        // Non-consuming pre-check to fail fast before opening a browser.
         await assertWithinBudget("profileViews");
         // Reject off-site URLs before opening a browser connection.
         assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
 
-        await recordAttempt("profileViews");
+        await consumeBudget("profileViews");
         // Navigate to the profile
         await nav.goToProfile(params.profileUrl);
 
@@ -219,7 +220,7 @@ export function registerLeadTools(server: McpServer): void {
           };
         }
 
-        await recordAttempt("saves");
+        await consumeBudget("saves");
         await nav.clickAndSettle(saveButton, WAIT_CONDITIONS.BUTTON_STATE_SETTLE);
 
         // If a specific list is requested, handle list selection

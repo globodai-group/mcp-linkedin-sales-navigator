@@ -20,7 +20,7 @@ import {
   assertWithinBudget,
   budgetErrorResult,
   BudgetExceededError,
-  recordAttempt,
+  consumeBudget,
 } from "../browser/rate-limit.js";
 
 /**
@@ -155,7 +155,7 @@ export function registerSearchTools(server: McpServer): void {
         await assertWithinBudget("searches");
         const nav = await ensureNavigator();
 
-        await recordAttempt("searches");
+        await consumeBudget("searches");
         // Build and navigate to search URL
         const searchUrl = buildSearchUrl(params);
         await nav.navigateTo(searchUrl);

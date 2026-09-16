@@ -261,7 +261,7 @@ When using Clawdbot's browser relay, the AI assistant can directly control a bro
 
 ## Troubleshooting
 
-Start with the `linkedin_session_status` tool. It connects lazily (same as other tools), reports `authMethod`, `connected`, `authenticated`, `usageToday`, and a short hint for the next step.
+Start with the `linkedin_session_status` tool. It connects lazily (same as other tools), reports `authMethod`, `browserConnected`, `authenticated`, `usageToday`, and a short hint for the next step.
 
 | Symptom | What to check |
 |---------|----------------|

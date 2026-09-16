@@ -14,7 +14,7 @@ import {
   assertWithinBudget,
   budgetErrorResult,
   BudgetExceededError,
-  recordAttempt,
+  consumeBudget,
 } from "../browser/rate-limit.js";
 
 /**
@@ -139,7 +139,7 @@ export function registerListTools(server: McpServer): void {
               "the name may be empty, too long, or duplicate an existing list."
           );
         }
-        await recordAttempt("saves");
+        await consumeBudget("saves");
         await nav.clickAndSettle(saveButton, 1500);
 
         return {

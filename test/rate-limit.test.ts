@@ -139,6 +139,34 @@ describe("UsageLimiter budgets", () => {
     expect((await limiter.getUsageToday()).searches.used).toBe(1);
   });
 
+  it("lets exactly cap concurrent consumeBudget calls through", async () => {
+    const limiter = new UsageLimiter({
+      store: createMemoryUsageStore(),
+      budgets: budgets({ searches: 2 }),
+      minActionIntervalMs: 0,
+    });
+
+    const results = await Promise.allSettled([
+      limiter.consumeBudget("searches"),
+      limiter.consumeBudget("searches"),
+      limiter.consumeBudget("searches"),
+      limiter.consumeBudget("searches"),
+      limiter.consumeBudget("searches"),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(2);
+    expect(rejected).toHaveLength(3);
+    expect(
+      rejected.every(
+        (r) =>
+          r.status === "rejected" && r.reason instanceof BudgetExceededError
+      )
+    ).toBe(true);
+    expect((await limiter.getUsageToday()).searches.used).toBe(2);
+  });
+
   it("throws when a positive cap is reached", async () => {
     const clock = mutableClock(Date.parse("2026-09-17T10:00:00"));
     const limiter = new UsageLimiter({

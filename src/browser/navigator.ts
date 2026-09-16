@@ -236,6 +236,11 @@ export class SalesNavigator {
     if (this.page) this.applyPageTimeouts(this.page);
   }
 
+  /** True when the active page is a dedicated tab we opened (not the user's). */
+  isOwnedWorkingPage(): boolean {
+    return this.ownedWorkingPage;
+  }
+
   /**
    * For mutating tools: stay on a Sales Navigator tab, or open a new
    * page so we do not navigate the user's google.com (etc.) tab.
@@ -544,6 +549,40 @@ export function getNavigator(): SalesNavigator {
 }
 
 /**
+ * Share one in-flight promise across concurrent callers.
+ * Assigns `state.current` synchronously before `start` runs.
+ */
+export function withSingleFlight<T>(
+  state: { current: Promise<T> | null },
+  start: () => Promise<T>
+): Promise<T> {
+  if (state.current) return state.current;
+
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const shared = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  // Publish before any await so concurrent callers join this attempt.
+  state.current = shared;
+
+  void (async () => {
+    try {
+      resolve(await start());
+    } catch (error) {
+      reject(error);
+    } finally {
+      if (state.current === shared) {
+        state.current = null;
+      }
+    }
+  })();
+
+  return shared;
+}
+
+/**
  * Attach to the browser without navigating or opening a new tab.
  * Used by linkedin_session_status and startup warmup.
  */
@@ -559,44 +598,49 @@ export async function ensureAttached(): Promise<SalesNavigator> {
   }
 
   const { browser, auth } = storedConfig;
-  pendingInit = (async () => {
-    const nav = new SalesNavigator(browser);
-    nav.setSessionLostHandler(() => {
-      nav.resetAuthVerified();
-      if (navigatorInstance === nav) {
-        navigatorInstance = null;
-        navigatorReady = false;
-      }
-      void nav.close().catch(() => {});
-    });
-    try {
-      await nav.initialize(auth);
-      navigatorInstance = nav;
-      navigatorReady = true;
-      if (!nav.isBrowserAttached()) {
-        navigatorInstance = null;
-        navigatorReady = false;
-        await nav.close().catch(() => {});
-        throw new Error("Browser disconnected during initialization");
-      }
-      return nav;
-    } catch (error) {
-      // initialize() also closes, but a throw before that catch (or a
-      // future edit that drops it) must not leak a CDP connection.
-      await nav.close().catch(() => {});
-      throw error;
-    }
-  })();
+  const flight = {
+    get current() {
+      return pendingInit;
+    },
+    set current(value: Promise<SalesNavigator> | null) {
+      pendingInit = value;
+    },
+  };
 
   try {
-    return await pendingInit;
+    return await withSingleFlight(flight, async () => {
+      const nav = new SalesNavigator(browser);
+      nav.setSessionLostHandler(() => {
+        nav.resetAuthVerified();
+        if (navigatorInstance === nav) {
+          navigatorInstance = null;
+          navigatorReady = false;
+        }
+        void nav.close().catch(() => {});
+      });
+      try {
+        await nav.initialize(auth);
+        navigatorInstance = nav;
+        navigatorReady = true;
+        if (!nav.isBrowserAttached()) {
+          navigatorInstance = null;
+          navigatorReady = false;
+          await nav.close().catch(() => {});
+          throw new Error("Browser disconnected during initialization");
+        }
+        return nav;
+      } catch (error) {
+        // initialize() also closes, but a throw before that catch (or a
+        // future edit that drops it) must not leak a CDP connection.
+        await nav.close().catch(() => {});
+        throw error;
+      }
+    });
   } catch (error) {
     // initialize() already wraps with authFailureHint; rethrow as-is
     // unless somehow bare.
     if (error instanceof Error) throw error;
     throw new Error(authFailureHint(auth, error));
-  } finally {
-    pendingInit = null;
   }
 }
 

@@ -29,6 +29,25 @@ describe("parseSalesNavigatorUrl", () => {
     ).toBe("https://www.linkedin.com/sales/lead/x");
   });
 
+  it("accepts a trailing-dot hostname", () => {
+    expect(
+      isSalesNavigatorUrl("https://www.linkedin.com./sales/lead/x")
+    ).toBe(true);
+    expect(isSalesNavigatorUrl("https://linkedin.com./sales/home")).toBe(true);
+  });
+
+  it("accepts explicit port 443 and rejects other ports", () => {
+    expect(
+      isSalesNavigatorUrl("https://www.linkedin.com:443/sales/lead/x")
+    ).toBe(true);
+    expect(() =>
+      assertSalesNavigatorUrl("https://www.linkedin.com:8443/sales/lead/x")
+    ).toThrow(/port/);
+    expect(() =>
+      assertSalesNavigatorUrl("https://www.linkedin.com:80/sales/lead/x")
+    ).toThrow(/port/);
+  });
+
   it("rejects hosts that only contain /sales/ in the path", () => {
     expect(() =>
       assertSalesNavigatorUrl("https://evil.test/sales/lead/x")

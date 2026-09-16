@@ -3,6 +3,7 @@ import {
   SalesNavigator,
   configureNavigator,
   closeNavigator,
+  withSingleFlight,
 } from "../src/browser/navigator.js";
 import { AUTH_SELECTORS } from "../src/browser/selectors.js";
 
@@ -110,5 +111,33 @@ describe("SalesNavigator authentication gating", () => {
     nav.resetAuthVerified();
     await nav.ensureAuthenticatedSession();
     expect(markerWaits).toBe(1);
+  });
+});
+
+describe("withSingleFlight", () => {
+  it("lets concurrent callers share one in-flight start", async () => {
+    const state: { current: Promise<string> | null } = { current: null };
+    let starts = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const start = async () => {
+      starts += 1;
+      await gate;
+      return "ok";
+    };
+
+    const p1 = withSingleFlight(state, start);
+    const p2 = withSingleFlight(state, start);
+    const p3 = withSingleFlight(state, start);
+    expect(starts).toBe(1);
+    expect(state.current).not.toBeNull();
+
+    release();
+    await expect(Promise.all([p1, p2, p3])).resolves.toEqual(["ok", "ok", "ok"]);
+    expect(starts).toBe(1);
+    expect(state.current).toBeNull();
   });
 });

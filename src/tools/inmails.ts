@@ -15,7 +15,7 @@ import {
   assertWithinBudget,
   budgetErrorResult,
   BudgetExceededError,
-  recordInMailAttempt,
+  consumeBudget,
 } from "../browser/rate-limit.js";
 
 /**
@@ -117,7 +117,10 @@ export function registerInMailTools(server: McpServer): void {
           throw new Error("Send button not found in compose modal");
         }
 
-        await recordInMailAttempt(false);
+        // Count the Send click even when the success check is inconclusive
+        // (compose still open, no toast) — conservative for account safety.
+        // Dry runs return earlier and never consume.
+        await consumeBudget("inmails");
         await nav.clickAndSettle(sendButton, 1500);
         await nav.humanDelay(1000, 2000);
 
