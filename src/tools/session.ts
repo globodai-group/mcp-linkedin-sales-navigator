@@ -3,7 +3,9 @@
  *
  * Explicit initialize/check step (issue #1): triggers the lazy browser
  * connection and reports auth method, connectivity, and authentication.
- * Never navigates or reloads the user's current tab.
+ * Never navigates or reloads the user's own tab; may open an owned
+ * dedicated tab (same path as other tools) when no Sales Navigator tab
+ * exists.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -16,6 +18,7 @@ import {
   isLinkedInAuthFailureUrl,
   isSalesNavigatorUrl,
 } from "../browser/url.js";
+import { URLS } from "../browser/selectors.js";
 import type { AuthConfig } from "../types/index.js";
 import { readUsageToday, type UsageToday } from "../browser/rate-limit.js";
 
@@ -31,13 +34,13 @@ export interface SessionStatus {
 function notOnSalesNavHint(auth: AuthConfig): string {
   if (auth.method === "cdp") {
     return [
-      "Browser is connected but no Sales Navigator tab is open.",
-      "Open https://www.linkedin.com/sales/home in the Chrome instance exposed by LSN_CDP_ENDPOINT and retry.",
+      "Browser is connected but Sales Navigator authentication could not be verified.",
+      "Log into LinkedIn Sales Navigator in the Chrome instance exposed by LSN_CDP_ENDPOINT.",
       "Call linkedin_session_status to diagnose.",
     ].join(" ");
   }
   return [
-    "Browser is connected but is not on a Sales Navigator page.",
+    "Browser is connected but Sales Navigator authentication could not be verified.",
     "Open https://www.linkedin.com/sales/home and retry.",
     "Call linkedin_session_status to diagnose.",
   ].join(" ");
@@ -46,7 +49,8 @@ function notOnSalesNavHint(auth: AuthConfig): string {
 /**
  * Probe browser connection and Sales Navigator authentication.
  * Never throws - always returns a structured status object.
- * Never calls page.goto or navigateToSalesNavigator.
+ * Never navigates the user's own tab; when no Sales Navigator tab
+ * exists, uses the same owned dedicated page tools use.
  */
 export async function probeSessionStatus(): Promise<SessionStatus> {
   const stored = getStoredNavigatorConfig();
@@ -80,6 +84,10 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
       };
     }
 
+    // Align with tools: bind an existing Sales Navigator tab when present,
+    // otherwise open an owned dedicated page (never hijack the user's tab).
+    await nav.adoptWorkingPage();
+
     if (!nav.isConnected()) {
       return {
         authMethod,
@@ -91,8 +99,61 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
       };
     }
 
-    const url = nav.getPage().url();
-    if (isLinkedInAuthFailureUrl(url)) {
+    const page = nav.getPage();
+    const urlBefore = page.url();
+
+    // Fast path: already on Sales Navigator — inspect without navigating.
+    if (isSalesNavigatorUrl(urlBefore)) {
+      if (isLinkedInAuthFailureUrl(urlBefore)) {
+        return {
+          authMethod,
+          browserConnected: true,
+          authenticated: false,
+          hint: authFailureHint(
+            stored.auth,
+            new Error("Not authenticated to LinkedIn Sales Navigator")
+          ),
+          error: "auth_failed",
+          usageToday,
+        };
+      }
+
+      const authenticated = await nav.checkAuth();
+      return {
+        authMethod,
+        browserConnected: true,
+        authenticated,
+        hint: authenticated
+          ? undefined
+          : authFailureHint(
+              stored.auth,
+              new Error("Not authenticated to LinkedIn Sales Navigator")
+            ),
+        error: authenticated ? undefined : "auth_failed",
+        usageToday,
+      };
+    }
+
+    // No Sales Navigator tab: navigate only the owned dedicated page to HOME
+    // (same path ensureAuthenticatedSession uses for tools).
+    const owned = (nav as unknown as { ownedWorkingPage: boolean }).ownedWorkingPage;
+    if (!owned) {
+      return {
+        authMethod,
+        browserConnected: true,
+        authenticated: false,
+        hint: notOnSalesNavHint(stored.auth),
+        error: "not_on_sales_nav",
+        usageToday,
+      };
+    }
+
+    await page.goto(URLS.HOME, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+
+    if (isLinkedInAuthFailureUrl(page.url())) {
       return {
         authMethod,
         browserConnected: true,
@@ -102,17 +163,6 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
           new Error("Not authenticated to LinkedIn Sales Navigator")
         ),
         error: "auth_failed",
-        usageToday,
-      };
-    }
-
-    if (!isSalesNavigatorUrl(url)) {
-      return {
-        authMethod,
-        browserConnected: true,
-        authenticated: false,
-        hint: notOnSalesNavHint(stored.auth),
-        error: "not_on_sales_nav",
         usageToday,
       };
     }
@@ -161,8 +211,8 @@ export function registerSessionTools(server: McpServer): void {
   server.tool(
     "linkedin_session_status",
     "Check LinkedIn Sales Navigator browser connection, authentication, and today's usage budgets. " +
-      "Call this before other tools to verify the session (auth method, browser connected, authenticated, usageToday). " +
-      "Attaches to the existing browser if needed but never navigates or reloads the current tab.",
+      "Call this before other tools to verify the session (auth method, browserConnected, authenticated, usageToday). " +
+      "Attaches to the existing browser if needed. Never navigates the user's own tab; opens an owned dedicated tab when no Sales Navigator tab exists (same as other tools).",
     {},
     async () => {
       try {
