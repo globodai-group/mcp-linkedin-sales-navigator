@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Auth check waits for the Sales Navigator shell instead of probing too early
 - CDP shutdown detaches from the user's browser only; it no longer closes their tabs
 - Lazy browser connection recovers from a failed startup (retries on each tool call)
-- Delivered InMails no longer reported as failures
+- InMail success is reported only when the compose window closes or LinkedIn shows a success message; otherwise the tool returns an error instead of a false success
 
 Thanks [@benjaminfrombe](https://github.com/benjaminfrombe) ([#3](https://github.com/globodai-group/mcp-linkedin-sales-navigator/pull/3)).
 
