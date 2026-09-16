@@ -431,6 +431,12 @@ export async function ensureNavigator(): Promise<SalesNavigator> {
       await nav.initialize(auth);
       navigatorInstance = nav;
       navigatorReady = true;
+      if (!nav.isConnected()) {
+        navigatorInstance = null;
+        navigatorReady = false;
+        await nav.close().catch(() => {});
+        throw new Error("Browser disconnected during initialization");
+      }
       return nav;
     } catch (error) {
       // initialize() also closes, but a throw before that catch (or a
