@@ -136,8 +136,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
 
     // No Sales Navigator tab: navigate only the owned dedicated page to HOME
     // (same path ensureAuthenticatedSession uses for tools).
-    const owned = (nav as unknown as { ownedWorkingPage: boolean }).ownedWorkingPage;
-    if (!owned) {
+    if (!nav.isOwnedWorkingPage()) {
       return {
         authMethod,
         browserConnected: true,

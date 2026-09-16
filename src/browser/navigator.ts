@@ -236,6 +236,11 @@ export class SalesNavigator {
     if (this.page) this.applyPageTimeouts(this.page);
   }
 
+  /** True when the active page is a dedicated tab we opened (not the user's). */
+  isOwnedWorkingPage(): boolean {
+    return this.ownedWorkingPage;
+  }
+
   /**
    * For mutating tools: stay on a Sales Navigator tab, or open a new
    * page so we do not navigate the user's google.com (etc.) tab.
