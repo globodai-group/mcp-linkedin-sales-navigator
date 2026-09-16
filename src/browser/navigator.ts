@@ -35,6 +35,9 @@ export class SalesNavigator {
    * destroy the user's own browser session and tabs (see issue #2).
    */
   private isAttachedSession = false;
+  private sessionLostHandler: (() => void) | null = null;
+  private sessionLostNotified = false;
+  private closing = false;
 
   constructor(config: Partial<BrowserConfig> = {}) {
     this.config = {
@@ -110,6 +113,8 @@ export class SalesNavigator {
       this.page.setDefaultTimeout(this.config.actionTimeout!);
       this.page.setDefaultNavigationTimeout(this.config.navigationTimeout!);
 
+      this.attachLifecycleListeners();
+
       // Verify authentication
       const isAuthed = await navigateToSalesNavigator(this.page);
       if (!isAuthed) {
@@ -151,6 +156,31 @@ export class SalesNavigator {
   /** True when a Playwright page is available. */
   isConnected(): boolean {
     return this.page !== null && this.context !== null;
+  }
+
+  /**
+   * Called when Chrome/CDP drops or the page closes so the singleton
+   * can drop this instance and reconnect on the next ensureNavigator.
+   */
+  setSessionLostHandler(handler: (() => void) | null): void {
+    this.sessionLostHandler = handler;
+  }
+
+  private notifySessionLost(): void {
+    if (this.closing || this.sessionLostNotified) return;
+    this.sessionLostNotified = true;
+    this.sessionLostHandler?.();
+  }
+
+  private attachLifecycleListeners(): void {
+    if (this.browser) {
+      this.browser.on("disconnected", () => this.notifySessionLost());
+    } else if (this.context) {
+      this.context.on("close", () => this.notifySessionLost());
+    }
+    if (this.page) {
+      this.page.on("close", () => this.notifySessionLost());
+    }
   }
 
   /**
@@ -288,6 +318,7 @@ export class SalesNavigator {
    * Close the browser and clean up resources.
    */
   async close(): Promise<void> {
+    this.closing = true;
     try {
       if (this.isAttachedSession) {
         // CDP: the browser, its context and its tabs belong to the user.
@@ -389,6 +420,13 @@ export async function ensureNavigator(): Promise<SalesNavigator> {
   const { browser, auth } = storedConfig;
   pendingInit = (async () => {
     const nav = new SalesNavigator(browser);
+    nav.setSessionLostHandler(() => {
+      if (navigatorInstance === nav) {
+        navigatorInstance = null;
+        navigatorReady = false;
+      }
+      void nav.close().catch(() => {});
+    });
     await nav.initialize(auth);
     navigatorInstance = nav;
     navigatorReady = true;
