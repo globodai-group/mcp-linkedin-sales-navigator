@@ -143,10 +143,18 @@ export function registerLeadTools(server: McpServer): void {
 
   server.tool(
     "linkedin_save_lead",
-    "Save a lead to a list on LinkedIn Sales Navigator",
+    "Save a lead to a list on LinkedIn Sales Navigator. " +
+      "Always preview first with dryRun=true before saving (default dryRun=false preserves prior behaviour).",
     {
       profileUrl: z.string().describe("Sales Navigator profile URL of the lead to save"),
       listName: z.string().optional().describe("Name of the list to save to (default: saved leads)"),
+      dryRun: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "If true, locate the save UI with human-like pacing but do not click Save (preview only). Prefer true before a real save."
+        ),
     },
     async (params) => {
       try {
@@ -174,6 +182,23 @@ export function registerLeadTools(server: McpServer): void {
         }
         if (!saveButton) {
           throw new Error("Save button not found on profile page");
+        }
+
+        if (params.dryRun) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: true,
+                  dryRun: true,
+                  message:
+                    "Dry run - save button found but not clicked. Re-run with dryRun=false to save.",
+                  listName: params.listName ?? null,
+                }),
+              },
+            ],
+          };
         }
 
         await nav.clickAndSettle(saveButton, WAIT_CONDITIONS.BUTTON_STATE_SETTLE);

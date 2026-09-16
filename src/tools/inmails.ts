@@ -17,7 +17,9 @@ import type { InMailResult } from "../types/index.js";
 export function registerInMailTools(server: McpServer): void {
   server.tool(
     "linkedin_send_inmail",
-    "Send an InMail message to a lead on LinkedIn Sales Navigator. Requires available InMail credits.",
+    "Send an InMail message to a lead on LinkedIn Sales Navigator. " +
+      "Requires available InMail credits. " +
+      "Always preview first with dryRun=true before sending (default dryRun=false preserves prior behaviour).",
     {
       profileUrl: z
         .string()
@@ -34,7 +36,9 @@ export function registerInMailTools(server: McpServer): void {
         .boolean()
         .optional()
         .default(false)
-        .describe("If true, compose the InMail but don't send it (for review)"),
+        .describe(
+          "If true, compose the InMail with human-like pacing but do not click Send (preview/review only). Prefer true before a real send."
+        ),
     },
     async (params) => {
       try {
