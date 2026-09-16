@@ -70,12 +70,21 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const alreadyHinted = message.includes("linkedin_session_status");
+    const lower = message.toLowerCase();
+    const authFailed =
+      lower.includes("not authenticated") ||
+      lower.includes("connected via cdp but not authenticated") ||
+      lower.includes("cookies loaded but session is not authenticated") ||
+      lower.includes("user data dir not logged in");
+
     return {
       authMethod,
+      // initialize() closes any partial session on failure, so the browser
+      // is not connected afterward; auth_failed still distinguishes why.
       browserConnected: false,
       authenticated: false,
       hint: alreadyHinted ? message : authFailureHint(stored.auth, error),
-      error: alreadyHinted ? "connection_failed" : message,
+      error: authFailed ? "auth_failed" : "connection_failed",
     };
   }
 }
