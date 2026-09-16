@@ -149,7 +149,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
 
     await page.goto(URLS.HOME, {
       waitUntil: "domcontentloaded",
-      timeout: 30000,
+      timeout: stored.browser.navigationTimeout ?? 30000,
     });
 
     if (isLinkedInAuthFailureUrl(page.url())) {
