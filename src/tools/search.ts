@@ -16,6 +16,12 @@ import {
   stripSuffix,
 } from "../browser/query.js";
 import type { LeadProfile, SearchResult } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  recordAttempt,
+} from "../browser/rate-limit.js";
 
 /**
  * Parse search results from the current page.
@@ -146,8 +152,10 @@ export function registerSearchTools(server: McpServer): void {
     },
     async (params) => {
       try {
+        await assertWithinBudget("searches");
         const nav = await ensureNavigator();
 
+        await recordAttempt("searches");
         // Build and navigate to search URL
         const searchUrl = buildSearchUrl(params);
         await nav.navigateTo(searchUrl);
@@ -165,6 +173,7 @@ export function registerSearchTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

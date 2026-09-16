@@ -22,6 +22,12 @@ import {
   stripSuffix,
 } from "../browser/query.js";
 import type { LeadProfile } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  consumeSearchPage,
+} from "../browser/rate-limit.js";
 
 /**
  * Collect leads from the current page (search results or list detail).
@@ -86,6 +92,7 @@ async function collectLeadsMultiPage(limit: number): Promise<LeadProfile[]> {
   const allLeads: LeadProfile[] = [];
 
   while (allLeads.length < limit) {
+    await consumeSearchPage();
     const pageLeads = await collectLeadsFromPage();
     allLeads.push(...pageLeads);
 
@@ -185,6 +192,7 @@ export function registerExportTools(server: McpServer): void {
           listId = assertListId(params.listId);
         }
 
+        await assertWithinBudget("searches");
         const nav = await ensureNavigator();
         const effectiveLimit = Math.min(params.limit, 250);
 
@@ -226,6 +234,7 @@ export function registerExportTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

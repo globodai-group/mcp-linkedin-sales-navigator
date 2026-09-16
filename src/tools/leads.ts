@@ -12,6 +12,12 @@ import { PROFILE_SELECTORS, WAIT_CONDITIONS } from "../browser/selectors.js";
 import { queryAll, queryFirst, textOfFirst } from "../browser/query.js";
 import { extractEntryDatesBrowser } from "../browser/dom-extract.js";
 import type { LeadProfile, ExperienceEntry, EducationEntry } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  recordAttempt,
+} from "../browser/rate-limit.js";
 
 /**
  * Parse a lead profile from the current page.
@@ -111,10 +117,12 @@ export function registerLeadTools(server: McpServer): void {
     },
     async (params) => {
       try {
+        await assertWithinBudget("profileViews");
         // Reject off-site URLs before opening a browser connection.
         assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
 
+        await recordAttempt("profileViews");
         // Navigate to the profile
         await nav.goToProfile(params.profileUrl);
 
@@ -130,6 +138,7 @@ export function registerLeadTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [
@@ -163,6 +172,9 @@ export function registerLeadTools(server: McpServer): void {
     },
     async (params) => {
       try {
+        if (!params.dryRun) {
+          await assertWithinBudget("saves");
+        }
         assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
         const page = nav.getPage();
@@ -207,6 +219,7 @@ export function registerLeadTools(server: McpServer): void {
           };
         }
 
+        await recordAttempt("saves");
         await nav.clickAndSettle(saveButton, WAIT_CONDITIONS.BUTTON_STATE_SETTLE);
 
         // If a specific list is requested, handle list selection
@@ -231,6 +244,7 @@ export function registerLeadTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

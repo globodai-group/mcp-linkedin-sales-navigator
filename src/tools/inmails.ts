@@ -11,6 +11,12 @@ import { assertSalesNavigatorUrl, salesNavigatorUrlSchema } from "../browser/url
 import { INMAIL_SELECTORS, PROFILE_SELECTORS, WAIT_CONDITIONS } from "../browser/selectors.js";
 import { queryFirst } from "../browser/query.js";
 import type { InMailResult } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  recordInMailAttempt,
+} from "../browser/rate-limit.js";
 
 /**
  * Register InMail tools with the MCP server.
@@ -43,6 +49,9 @@ export function registerInMailTools(server: McpServer): void {
     },
     async (params) => {
       try {
+        if (!params.dryRun) {
+          await assertWithinBudget("inmails");
+        }
         assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
         const page = nav.getPage();
@@ -108,6 +117,7 @@ export function registerInMailTools(server: McpServer): void {
           throw new Error("Send button not found in compose modal");
         }
 
+        await recordInMailAttempt(false);
         await nav.clickAndSettle(sendButton, 1500);
         await nav.humanDelay(1000, 2000);
 
@@ -171,6 +181,7 @@ export function registerInMailTools(server: McpServer): void {
           ...(success ? {} : { isError: true }),
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [
