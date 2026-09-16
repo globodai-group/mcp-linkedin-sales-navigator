@@ -20,6 +20,7 @@ import { URLS, WAIT_CONDITIONS } from "./selectors.js";
 import { extractTopcardFieldsBrowser, type TopcardHeuristicResult } from "./dom-extract.js";
 import { anyOf, queryFirst, textOfFirst, type SelectorList } from "./query.js";
 import type { BrowserConfig, AuthConfig } from "../types/index.js";
+import { authFailureHint } from "../config.js";
 import { readFile } from "node:fs/promises";
 
 export class SalesNavigator {
@@ -49,62 +50,74 @@ export class SalesNavigator {
    * Initialize the browser and connect to Sales Navigator.
    */
   async initialize(authConfig: AuthConfig): Promise<void> {
-    if (authConfig.method === "cdp" && authConfig.cdpEndpoint) {
-      // Connect to an existing browser via CDP. This browser belongs to
-      // the user, not to us - never close it (see `close()`).
-      this.browser = await chromium.connectOverCDP(authConfig.cdpEndpoint);
-      this.isAttachedSession = true;
-      const contexts = this.browser.contexts();
-      this.context = contexts[0] || (await this.browser.newContext());
-    } else if (authConfig.method === "session" && authConfig.userDataDir) {
-      // Launch with existing user data directory
-      this.context = await chromium.launchPersistentContext(
-        authConfig.userDataDir,
-        {
+    try {
+      if (authConfig.method === "cdp") {
+        if (!authConfig.cdpEndpoint) {
+          throw new Error("LSN_CDP_ENDPOINT is not set");
+        }
+        // Connect to an existing browser via CDP. This browser belongs to
+        // the user, not to us - never close it (see `close()`).
+        this.browser = await chromium.connectOverCDP(authConfig.cdpEndpoint);
+        this.isAttachedSession = true;
+        const contexts = this.browser.contexts();
+        this.context = contexts[0] || (await this.browser.newContext());
+      } else if (authConfig.method === "session") {
+        if (!authConfig.userDataDir) {
+          throw new Error("LSN_USER_DATA_DIR is not set");
+        }
+        // Launch with existing user data directory
+        this.context = await chromium.launchPersistentContext(
+          authConfig.userDataDir,
+          {
+            headless: this.config.headless,
+            viewport: {
+              width: this.config.viewportWidth!,
+              height: this.config.viewportHeight!,
+            },
+          }
+        );
+      } else if (authConfig.method === "cookies") {
+        if (!authConfig.cookiesPath) {
+          throw new Error("LSN_COOKIES_PATH is not set");
+        }
+        this.browser = await chromium.launch({
           headless: this.config.headless,
+        });
+        this.context = await this.browser.newContext({
           viewport: {
             width: this.config.viewportWidth!,
             height: this.config.viewportHeight!,
           },
-        }
-      );
-    } else {
-      // Default: launch fresh browser
-      this.browser = await chromium.launch({
-        headless: this.config.headless,
-      });
-      this.context = await this.browser.newContext({
-        viewport: {
-          width: this.config.viewportWidth!,
-          height: this.config.viewportHeight!,
-        },
-        userAgent:
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      });
-    }
+          userAgent:
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        });
+        const cookiesJson = await readFile(authConfig.cookiesPath, "utf-8");
+        await restoreSessionFromCookies(this.context, cookiesJson);
+      } else {
+        throw new Error(`Unknown auth method: ${String(authConfig.method)}`);
+      }
 
-    // Restore cookies if provided
-    if (authConfig.method === "cookies" && authConfig.cookiesPath) {
-      const cookiesJson = await readFile(authConfig.cookiesPath, "utf-8");
-      await restoreSessionFromCookies(this.context, cookiesJson);
-    }
+      if (!this.context) {
+        throw new Error("Browser context was not created");
+      }
 
-    // Get or create a page
-    const pages = this.context.pages();
-    this.page = pages[0] || (await this.context.newPage());
+      // Get or create a page
+      const pages = this.context.pages();
+      this.page = pages[0] || (await this.context.newPage());
 
-    // Set default timeouts
-    this.page.setDefaultTimeout(this.config.actionTimeout!);
-    this.page.setDefaultNavigationTimeout(this.config.navigationTimeout!);
+      // Set default timeouts
+      this.page.setDefaultTimeout(this.config.actionTimeout!);
+      this.page.setDefaultNavigationTimeout(this.config.navigationTimeout!);
 
-    // Verify authentication
-    const isAuthed = await navigateToSalesNavigator(this.page);
-    if (!isAuthed) {
-      throw new Error(
-        "Not authenticated to LinkedIn Sales Navigator. " +
-          "Please ensure you have an active LinkedIn session. " +
-          "Use cookie-based auth or connect via CDP to an authenticated browser."
-      );
+      // Verify authentication
+      const isAuthed = await navigateToSalesNavigator(this.page);
+      if (!isAuthed) {
+        throw new Error("Not authenticated to LinkedIn Sales Navigator");
+      }
+    } catch (error) {
+      // Detach/close whatever we opened so a retry can start clean.
+      await this.close().catch(() => {});
+      throw new Error(authFailureHint(authConfig, error));
     }
   }
 
@@ -114,7 +127,8 @@ export class SalesNavigator {
   getPage(): Page {
     if (!this.page) {
       throw new Error(
-        "Browser not initialized. Call initialize() first."
+        "Browser is not connected. Call linkedin_session_status to diagnose, " +
+          "and check LSN_AUTH_METHOD plus the related LSN_* variables."
       );
     }
     return this.page;
@@ -126,10 +140,16 @@ export class SalesNavigator {
   getContext(): BrowserContext {
     if (!this.context) {
       throw new Error(
-        "Browser not initialized. Call initialize() first."
+        "Browser is not connected. Call linkedin_session_status to diagnose, " +
+          "and check LSN_AUTH_METHOD plus the related LSN_* variables."
       );
     }
     return this.context;
+  }
+
+  /** True when a Playwright page is available. */
+  isConnected(): boolean {
+    return this.page !== null && this.context !== null;
   }
 
   /**
@@ -325,6 +345,19 @@ export function configureNavigator(
   storedConfig = { browser: browserConfig, auth: authConfig };
 }
 
+/** Stored auth/browser config from startup (null before configureNavigator). */
+export function getStoredNavigatorConfig(): {
+  browser: Partial<BrowserConfig>;
+  auth: AuthConfig;
+} | null {
+  return storedConfig;
+}
+
+/** Whether ensureNavigator has completed successfully. */
+export function isNavigatorReady(): boolean {
+  return navigatorReady && navigatorInstance !== null;
+}
+
 export function getNavigator(): SalesNavigator {
   if (!navigatorInstance) {
     navigatorInstance = new SalesNavigator();
@@ -350,7 +383,8 @@ export async function ensureNavigator(): Promise<SalesNavigator> {
 
   if (!storedConfig) {
     throw new Error(
-      "Navigator is not configured. configureNavigator() must be called at server startup."
+      "Navigator is not configured at startup. Check LSN_* environment variables " +
+        "and call linkedin_session_status to diagnose."
     );
   }
 
@@ -365,6 +399,11 @@ export async function ensureNavigator(): Promise<SalesNavigator> {
 
   try {
     return await pendingInit;
+  } catch (error) {
+    // initialize() already wraps with authFailureHint; rethrow as-is
+    // unless somehow bare.
+    if (error instanceof Error) throw error;
+    throw new Error(authFailureHint(auth, error));
   } finally {
     pendingInit = null;
   }
