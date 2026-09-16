@@ -7,6 +7,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ensureNavigator } from "../browser/navigator.js";
+import { assertSalesNavigatorUrl, salesNavigatorUrlSchema } from "../browser/url.js";
 import { PROFILE_SELECTORS, WAIT_CONDITIONS } from "../browser/selectors.js";
 import { queryAll, queryFirst, textOfFirst } from "../browser/query.js";
 import { extractEntryDatesBrowser } from "../browser/dom-extract.js";
@@ -104,12 +105,14 @@ export function registerLeadTools(server: McpServer): void {
     "linkedin_get_lead_profile",
     "Get detailed profile information for a LinkedIn Sales Navigator lead",
     {
-      profileUrl: z
-        .string()
-        .describe("Sales Navigator profile URL (e.g., https://www.linkedin.com/sales/lead/...)"),
+      profileUrl: salesNavigatorUrlSchema.describe(
+        "Sales Navigator profile URL (e.g., https://www.linkedin.com/sales/lead/...)"
+      ),
     },
     async (params) => {
       try {
+        // Reject off-site URLs before opening a browser connection.
+        assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
 
         // Navigate to the profile
@@ -146,7 +149,9 @@ export function registerLeadTools(server: McpServer): void {
     "Save a lead to a list on LinkedIn Sales Navigator. " +
       "Always preview first with dryRun=true before saving (default dryRun=false preserves prior behaviour).",
     {
-      profileUrl: z.string().describe("Sales Navigator profile URL of the lead to save"),
+      profileUrl: salesNavigatorUrlSchema.describe(
+        "Sales Navigator profile URL of the lead to save"
+      ),
       listName: z.string().optional().describe("Name of the list to save to (default: saved leads)"),
       dryRun: z
         .boolean()
@@ -158,6 +163,7 @@ export function registerLeadTools(server: McpServer): void {
     },
     async (params) => {
       try {
+        assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
         const page = nav.getPage();
 

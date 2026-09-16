@@ -21,6 +21,7 @@ import { extractTopcardFieldsBrowser, type TopcardHeuristicResult } from "./dom-
 import { anyOf, queryFirst, textOfFirst, type SelectorList } from "./query.js";
 import type { BrowserConfig, AuthConfig } from "../types/index.js";
 import { authFailureHint } from "../config.js";
+import { assertSalesNavigatorUrl } from "./url.js";
 import { readFile } from "node:fs/promises";
 
 export class SalesNavigator {
@@ -156,8 +157,9 @@ export class SalesNavigator {
    * Navigate to a Sales Navigator URL.
    */
   async navigateTo(url: string): Promise<void> {
+    const safeUrl = assertSalesNavigatorUrl(url);
     const page = this.getPage();
-    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.goto(safeUrl, { waitUntil: "domcontentloaded" });
     await this.humanDelay();
   }
 
@@ -278,10 +280,6 @@ export class SalesNavigator {
    * Navigate to a specific lead profile.
    */
   async goToProfile(profileUrl: string): Promise<void> {
-    // Ensure it's a Sales Navigator URL
-    if (!profileUrl.includes("/sales/")) {
-      throw new Error("URL must be a Sales Navigator profile URL");
-    }
     await this.navigateTo(profileUrl);
     await this.getPage().waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
   }

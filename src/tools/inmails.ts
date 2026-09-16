@@ -7,6 +7,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ensureNavigator } from "../browser/navigator.js";
+import { assertSalesNavigatorUrl, salesNavigatorUrlSchema } from "../browser/url.js";
 import { INMAIL_SELECTORS, PROFILE_SELECTORS, WAIT_CONDITIONS } from "../browser/selectors.js";
 import { queryFirst } from "../browser/query.js";
 import type { InMailResult } from "../types/index.js";
@@ -21,9 +22,9 @@ export function registerInMailTools(server: McpServer): void {
       "Requires available InMail credits. " +
       "Always preview first with dryRun=true before sending (default dryRun=false preserves prior behaviour).",
     {
-      profileUrl: z
-        .string()
-        .describe("Sales Navigator profile URL of the recipient"),
+      profileUrl: salesNavigatorUrlSchema.describe(
+        "Sales Navigator profile URL of the recipient"
+      ),
       subject: z
         .string()
         .max(200)
@@ -42,6 +43,7 @@ export function registerInMailTools(server: McpServer): void {
     },
     async (params) => {
       try {
+        assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
         const page = nav.getPage();
 
