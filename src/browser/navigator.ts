@@ -12,12 +12,16 @@ import {
   type Page,
 } from "playwright";
 import { inspectCurrentAuth, restoreSessionFromCookies } from "./auth.js";
-import { URLS, WAIT_CONDITIONS } from "./selectors.js";
+import { AUTH_SELECTORS, URLS, WAIT_CONDITIONS } from "./selectors.js";
 import { extractTopcardFieldsBrowser, type TopcardHeuristicResult } from "./dom-extract.js";
 import { anyOf, queryFirst, textOfFirst, type SelectorList } from "./query.js";
 import type { BrowserConfig, AuthConfig } from "../types/index.js";
 import { authFailureHint } from "../config.js";
-import { assertSalesNavigatorUrl, isSalesNavigatorUrl } from "./url.js";
+import {
+  assertSalesNavigatorUrl,
+  isLinkedInAuthFailureUrl,
+  isSalesNavigatorUrl,
+} from "./url.js";
 import { readFile } from "node:fs/promises";
 
 export class SalesNavigator {
@@ -37,6 +41,8 @@ export class SalesNavigator {
   private browserListenersBound = false;
   /** True when we opened a dedicated tab so tools do not hijack the user's. */
   private ownedWorkingPage = false;
+  /** Cached positive auth check for mutating tools (reset on disconnect or auth failure). */
+  private authVerified = false;
 
   constructor(config: Partial<BrowserConfig> = {}) {
     this.config = {
@@ -234,6 +240,64 @@ export class SalesNavigator {
    * page so we do not navigate the user's google.com (etc.) tab.
    * Does not goto any URL.
    */
+  /** Drop cached authentication so the next tool re-validates the session. */
+  resetAuthVerified(): void {
+    this.authVerified = false;
+  }
+
+  private throwNotAuthenticated(): never {
+    const stored = getStoredNavigatorConfig();
+    if (!stored) {
+      throw new Error(
+        "Not authenticated to LinkedIn Sales Navigator. Call linkedin_session_status to diagnose."
+      );
+    }
+    throw new Error(
+      authFailureHint(
+        stored.auth,
+        new Error("Not authenticated to LinkedIn Sales Navigator")
+      )
+    );
+  }
+
+  private async pageShowsAuthFailure(page: Page): Promise<boolean> {
+    if (isLinkedInAuthFailureUrl(page.url())) return true;
+    const challenge = await page
+      .$(AUTH_SELECTORS.CHALLENGE_PAGE)
+      .catch(() => null);
+    return challenge !== null;
+  }
+
+  /**
+   * Verify Sales Navigator authentication for mutating tools. Navigates
+   * only the dedicated owned tab to /sales/home when needed; never
+   * reloads the user's non–Sales Navigator tab.
+   */
+  async ensureAuthenticatedSession(): Promise<void> {
+    if (this.authVerified) return;
+    if (!this.page) {
+      this.throwNotAuthenticated();
+    }
+    const page = this.page;
+    if (!isSalesNavigatorUrl(page.url())) {
+      if (!this.ownedWorkingPage) {
+        this.throwNotAuthenticated();
+      }
+      await page.goto(URLS.HOME, {
+        waitUntil: "domcontentloaded",
+        timeout: this.config.navigationTimeout,
+      });
+      if (await this.pageShowsAuthFailure(page)) {
+        this.throwNotAuthenticated();
+      }
+    }
+    const ok = await inspectCurrentAuth(page);
+    if (!ok) {
+      this.throwNotAuthenticated();
+    }
+    this.authVerified = true;
+  }
+
   async adoptWorkingPage(): Promise<void> {
     const salesPage = this.findSalesNavPage();
     if (salesPage) {
@@ -261,6 +325,10 @@ export class SalesNavigator {
     const safeUrl = assertSalesNavigatorUrl(url);
     const page = this.getPage();
     await page.goto(safeUrl, { waitUntil: "domcontentloaded" });
+    if (await this.pageShowsAuthFailure(page)) {
+      this.resetAuthVerified();
+      this.throwNotAuthenticated();
+    }
     await this.humanDelay();
   }
 
@@ -485,6 +553,7 @@ export async function ensureAttached(): Promise<SalesNavigator> {
   pendingInit = (async () => {
     const nav = new SalesNavigator(browser);
     nav.setSessionLostHandler(() => {
+      nav.resetAuthVerified();
       if (navigatorInstance === nav) {
         navigatorInstance = null;
         navigatorReady = false;
@@ -532,6 +601,7 @@ export async function ensureAttached(): Promise<SalesNavigator> {
 export async function ensureNavigator(): Promise<SalesNavigator> {
   const nav = await ensureAttached();
   await nav.adoptWorkingPage();
+  await nav.ensureAuthenticatedSession();
   return nav;
 }
 
@@ -545,6 +615,7 @@ export async function initializeNavigator(
 
 export async function closeNavigator(): Promise<void> {
   if (navigatorInstance) {
+    navigatorInstance.resetAuthVerified();
     await navigatorInstance.close();
     navigatorInstance = null;
   }
