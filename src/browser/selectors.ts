@@ -96,7 +96,19 @@ export const SEARCH_SELECTORS = {
    * (also hashed-per-field-only-when-unlucky) CSS classes for those.
    */
   RESULTS_CONTAINER: ["ol.artdeco-list", ".search-results__result-list"],
+  /**
+   * Unscoped result row — matches every `li.artdeco-list__item` on the
+   * page (filters, nav). Prefer {@link RESULT_ITEM_IN_CONTAINER} when
+   * querying the document; keep this for scoped `element` handles.
+   */
   RESULT_ITEM: ["li.artdeco-list__item", "li.search-results__result-item"],
+  /** Result rows limited to the search results list container. */
+  RESULT_ITEM_IN_CONTAINER: [
+    "ol.artdeco-list > li.artdeco-list__item",
+    "ol.artdeco-list > li.search-results__result-item",
+    ".search-results__result-list > li.artdeco-list__item",
+    ".search-results__result-list > li.search-results__result-item",
+  ],
   RESULT_NAME: [
     '[data-anonymize="person-name"]',
     ".artdeco-entity-lockup__title a",
@@ -250,7 +262,7 @@ export const PROFILE_SELECTORS = {
    * Best-effort; a missing match is treated as absent data rather than
    * an error (see `tools/leads.ts`).
    */
-  EDUCATION_DEGREE: [".profile-education__degree", "span"],
+  EDUCATION_DEGREE: [".profile-education__degree"],
 } as const;
 
 export const LIST_SELECTORS = {
