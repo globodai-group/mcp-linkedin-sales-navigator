@@ -18,7 +18,7 @@ import { registerInMailTools } from "./tools/inmails.js";
 import { registerListTools } from "./tools/lists.js";
 import { registerExportTools } from "./tools/export.js";
 import { registerSessionTools } from "./tools/session.js";
-import { configureNavigator, ensureNavigator, closeNavigator } from "./browser/navigator.js";
+import { configureNavigator, ensureAttached, closeNavigator } from "./browser/navigator.js";
 import { parseConfig } from "./config.js";
 
 const require = createRequire(import.meta.url);
@@ -79,11 +79,11 @@ async function main(): Promise<void> {
 
   console.error("[LSN] LinkedIn Sales Navigator MCP server started");
 
-  // Warm the browser connection in the background. Failure here is not
-  // fatal - the browser may simply not be running yet, and each tool
-  // connects on demand via ensureNavigator().
-  ensureNavigator().then(
-    () => console.error("[LSN] Browser connected and authenticated"),
+  // Warm the browser attachment in the background without navigating.
+  // Failure here is not fatal - the browser may simply not be running yet,
+  // and each tool connects on demand via ensureNavigator().
+  ensureAttached().then(
+    () => console.error("[LSN] Browser attached"),
     (error: unknown) =>
       console.error(
         "[LSN] Browser not connected at startup; tools will connect on first use:",

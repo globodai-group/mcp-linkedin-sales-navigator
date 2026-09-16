@@ -11,17 +11,13 @@ import {
   type BrowserContext,
   type Page,
 } from "playwright";
-import {
-  isAuthenticated,
-  restoreSessionFromCookies,
-  navigateToSalesNavigator,
-} from "./auth.js";
+import { inspectCurrentAuth, restoreSessionFromCookies } from "./auth.js";
 import { URLS, WAIT_CONDITIONS } from "./selectors.js";
 import { extractTopcardFieldsBrowser, type TopcardHeuristicResult } from "./dom-extract.js";
 import { anyOf, queryFirst, textOfFirst, type SelectorList } from "./query.js";
 import type { BrowserConfig, AuthConfig } from "../types/index.js";
 import { authFailureHint } from "../config.js";
-import { assertSalesNavigatorUrl } from "./url.js";
+import { assertSalesNavigatorUrl, isSalesNavigatorUrl } from "./url.js";
 import { readFile } from "node:fs/promises";
 
 export class SalesNavigator {
@@ -38,6 +34,9 @@ export class SalesNavigator {
   private sessionLostHandler: (() => void) | null = null;
   private sessionLostNotified = false;
   private closing = false;
+  private browserListenersBound = false;
+  /** True when we opened a dedicated tab so tools do not hijack the user's. */
+  private ownedWorkingPage = false;
 
   constructor(config: Partial<BrowserConfig> = {}) {
     this.config = {
@@ -105,21 +104,10 @@ export class SalesNavigator {
         throw new Error("Browser context was not created");
       }
 
-      // Get or create a page
-      const pages = this.context.pages();
-      this.page = pages[0] || (await this.context.newPage());
-
-      // Set default timeouts
-      this.page.setDefaultTimeout(this.config.actionTimeout!);
-      this.page.setDefaultNavigationTimeout(this.config.navigationTimeout!);
-
+      // Bind an existing tab. Never goto /sales/home here: that reloads
+      // the user's current Sales Navigator tab (status probe + warmup).
+      await this.bindExistingPage(authConfig.method !== "cdp");
       this.attachLifecycleListeners();
-
-      // Verify authentication
-      const isAuthed = await navigateToSalesNavigator(this.page);
-      if (!isAuthed) {
-        throw new Error("Not authenticated to LinkedIn Sales Navigator");
-      }
     } catch (error) {
       // Detach/close whatever we opened so a retry can start clean.
       await this.close().catch(() => {});
@@ -158,6 +146,11 @@ export class SalesNavigator {
     return this.page !== null && this.context !== null;
   }
 
+  /** True when the Playwright client holds a browser or context. */
+  isBrowserAttached(): boolean {
+    return this.browser !== null || this.context !== null;
+  }
+
   /**
    * Called when Chrome/CDP drops or the page closes so the singleton
    * can drop this instance and reconnect on the next ensureNavigator.
@@ -173,14 +166,92 @@ export class SalesNavigator {
   }
 
   private attachLifecycleListeners(): void {
-    if (this.browser) {
-      this.browser.on("disconnected", () => this.notifySessionLost());
-    } else if (this.context) {
-      this.context.on("close", () => this.notifySessionLost());
+    if (!this.browserListenersBound) {
+      if (this.browser) {
+        this.browser.on("disconnected", () => this.notifySessionLost());
+        this.browserListenersBound = true;
+      } else if (this.context) {
+        this.context.on("close", () => this.notifySessionLost());
+        this.browserListenersBound = true;
+      }
     }
     if (this.page) {
-      this.page.on("close", () => this.notifySessionLost());
+      const page = this.page;
+      page.on("close", () => {
+        // Ignore close of a tab we already switched away from.
+        if (this.page !== page) return;
+        this.notifySessionLost();
+      });
     }
+  }
+
+  private findSalesNavPage(): Page | null {
+    const contexts =
+      this.browser?.contexts() ?? (this.context ? [this.context] : []);
+    for (const ctx of contexts) {
+      for (const page of ctx.pages()) {
+        if (isSalesNavigatorUrl(page.url())) return page;
+      }
+    }
+    return null;
+  }
+
+  private applyPageTimeouts(page: Page): void {
+    page.setDefaultTimeout(this.config.actionTimeout!);
+    page.setDefaultNavigationTimeout(this.config.navigationTimeout!);
+  }
+
+  /**
+   * Use an existing tab. Prefer a Sales Navigator tab; otherwise the
+   * first open page. Only create a page when the method owns the browser
+   * (cookies / session) and none exist. CDP never opens a new tab here.
+   */
+  private async bindExistingPage(createIfMissing: boolean): Promise<void> {
+    if (!this.context) {
+      throw new Error("Browser context was not created");
+    }
+    const salesPage = this.findSalesNavPage();
+    if (salesPage) {
+      this.page = salesPage;
+      this.ownedWorkingPage = false;
+    } else {
+      const pages = this.context.pages();
+      if (pages[0]) {
+        this.page = pages[0];
+        this.ownedWorkingPage = false;
+      } else if (createIfMissing) {
+        this.page = await this.context.newPage();
+        this.ownedWorkingPage = true;
+      } else {
+        this.page = null;
+      }
+    }
+    if (this.page) this.applyPageTimeouts(this.page);
+  }
+
+  /**
+   * For mutating tools: stay on a Sales Navigator tab, or open a new
+   * page so we do not navigate the user's google.com (etc.) tab.
+   * Does not goto any URL.
+   */
+  async adoptWorkingPage(): Promise<void> {
+    const salesPage = this.findSalesNavPage();
+    if (salesPage) {
+      if (this.page !== salesPage) {
+        this.page = salesPage;
+        this.ownedWorkingPage = false;
+        this.applyPageTimeouts(salesPage);
+        this.attachLifecycleListeners();
+      }
+      return;
+    }
+    if (this.page && isSalesNavigatorUrl(this.page.url())) return;
+    if (this.ownedWorkingPage && this.page) return;
+    if (!this.context) return;
+    this.page = await this.context.newPage();
+    this.ownedWorkingPage = true;
+    this.applyPageTimeouts(this.page);
+    this.attachLifecycleListeners();
   }
 
   /**
@@ -194,10 +265,11 @@ export class SalesNavigator {
   }
 
   /**
-   * Check if still authenticated.
+   * Inspect the current tab only. Never navigates.
    */
   async checkAuth(): Promise<boolean> {
-    return isAuthenticated(this.getPage());
+    if (!this.page) return false;
+    return inspectCurrentAuth(this.page);
   }
 
   /**
@@ -395,18 +467,10 @@ export function getNavigator(): SalesNavigator {
 }
 
 /**
- * Get a browser-connected navigator, connecting on first use.
- *
- * Startup connection is best-effort: the browser may not be running yet
- * when the MCP server starts, and a tool call can arrive before the
- * startup attempt finishes. Without this, every tool failed for the rest
- * of the process with "Browser not initialized" and never retried - the
- * lazy path the startup code claimed to have, but did not implement.
- *
- * Concurrent callers share a single in-flight attempt; a failed attempt
- * is not cached, so the next call retries.
+ * Attach to the browser without navigating or opening a new tab.
+ * Used by linkedin_session_status and startup warmup.
  */
-export async function ensureNavigator(): Promise<SalesNavigator> {
+export async function ensureAttached(): Promise<SalesNavigator> {
   if (navigatorInstance && navigatorReady) return navigatorInstance;
   if (pendingInit) return pendingInit;
 
@@ -431,7 +495,7 @@ export async function ensureNavigator(): Promise<SalesNavigator> {
       await nav.initialize(auth);
       navigatorInstance = nav;
       navigatorReady = true;
-      if (!nav.isConnected()) {
+      if (!nav.isBrowserAttached()) {
         navigatorInstance = null;
         navigatorReady = false;
         await nav.close().catch(() => {});
@@ -456,6 +520,19 @@ export async function ensureNavigator(): Promise<SalesNavigator> {
   } finally {
     pendingInit = null;
   }
+}
+
+/**
+ * Get a browser-connected navigator for tools, connecting on first use.
+ *
+ * Attaches without goto /sales/home. If no Sales Navigator tab exists,
+ * opens a dedicated page so tool navigation does not hijack the user's
+ * current tab. Concurrent callers share a single in-flight attach.
+ */
+export async function ensureNavigator(): Promise<SalesNavigator> {
+  const nav = await ensureAttached();
+  await nav.adoptWorkingPage();
+  return nav;
 }
 
 export async function initializeNavigator(

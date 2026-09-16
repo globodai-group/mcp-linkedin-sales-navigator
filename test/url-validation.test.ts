@@ -3,6 +3,7 @@ import {
   LIST_ID_PATTERN,
   assertListId,
   assertSalesNavigatorUrl,
+  isLinkedInAuthFailureUrl,
   isSalesNavigatorUrl,
   listIdSchema,
   parseSalesNavigatorUrl,
@@ -76,6 +77,32 @@ describe("salesNavigatorUrlSchema", () => {
       "https://evil.test/sales/lead/x"
     );
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("isLinkedInAuthFailureUrl", () => {
+  it("detects login, checkpoint, and authwall paths", () => {
+    expect(isLinkedInAuthFailureUrl("https://www.linkedin.com/login")).toBe(
+      true
+    );
+    expect(
+      isLinkedInAuthFailureUrl("https://www.linkedin.com/checkpoint/challenge/x")
+    ).toBe(true);
+    expect(
+      isLinkedInAuthFailureUrl("https://www.linkedin.com/authwall?trk=1")
+    ).toBe(true);
+    expect(
+      isLinkedInAuthFailureUrl("https://www.linkedin.com/uas/login")
+    ).toBe(true);
+  });
+
+  it("does not flag Sales Navigator pages", () => {
+    expect(
+      isLinkedInAuthFailureUrl("https://www.linkedin.com/sales/home")
+    ).toBe(false);
+    expect(
+      isLinkedInAuthFailureUrl("https://www.linkedin.com/sales/lead/x")
+    ).toBe(false);
   });
 });
 

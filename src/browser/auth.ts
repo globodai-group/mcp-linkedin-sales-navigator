@@ -13,6 +13,10 @@
 import { type Page, type BrowserContext } from "playwright";
 import { AUTH_SELECTORS, URLS, WAIT_CONDITIONS } from "./selectors.js";
 import { anyOf } from "./query.js";
+import {
+  isLinkedInAuthFailureUrl,
+  isSalesNavigatorUrl,
+} from "./url.js";
 import type { AuthConfig } from "../types/index.js";
 
 /** Combined presence check: header or profile icon, order does not matter. */
@@ -24,22 +28,6 @@ const LOGGED_IN_MARKERS = anyOf([
 /** Bound for the logged-in marker wait (one retry may add a short extra wait). */
 const AUTH_MARKER_TIMEOUT_MS = 8000;
 
-function isAuthFailureUrl(url: string): boolean {
-  let path = url;
-  try {
-    path = new URL(url).pathname;
-  } catch {
-    // keep the raw string
-  }
-  const lower = path.toLowerCase();
-  return (
-    lower.includes("/login") ||
-    lower.includes("/checkpoint") ||
-    lower.includes("/authwall") ||
-    lower.includes("/uas/")
-  );
-}
-
 /**
  * Check whether the current page (no navigation) shows an
  * authenticated Sales Navigator session, without navigating away from
@@ -47,7 +35,7 @@ function isAuthFailureUrl(url: string): boolean {
  */
 async function checkAuthIndicators(page: Page): Promise<boolean> {
   // Fail fast: login / checkpoint / authwall means the session is dead.
-  if (isAuthFailureUrl(page.url())) return false;
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
 
   const challenge = await page.$(AUTH_SELECTORS.CHALLENGE_PAGE).catch(() => null);
   if (challenge) return false;
@@ -61,7 +49,7 @@ async function checkAuthIndicators(page: Page): Promise<boolean> {
     .waitForSelector(LOGGED_IN_MARKERS, { timeout: AUTH_MARKER_TIMEOUT_MS })
     .catch(() => null);
   if (found) return true;
-  if (isAuthFailureUrl(page.url())) return false;
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
 
   // At most one retry, and only if the document actually changed.
   if (page.url() === urlBefore) return false;
@@ -69,6 +57,19 @@ async function checkAuthIndicators(page: Page): Promise<boolean> {
     .waitForSelector(LOGGED_IN_MARKERS, { timeout: 2000 })
     .catch(() => null);
   return retry !== null;
+}
+
+/**
+ * Inspect the current page only. Never navigates.
+ *
+ * Returns false immediately on login/checkpoint/authwall or when the
+ * tab is not a Sales Navigator URL (so a google.com tab does not wait 8s).
+ */
+export async function inspectCurrentAuth(page: Page): Promise<boolean> {
+  const url = page.url();
+  if (isLinkedInAuthFailureUrl(url)) return false;
+  if (!isSalesNavigatorUrl(url)) return false;
+  return checkAuthIndicators(page);
 }
 
 /**
@@ -151,7 +152,7 @@ export async function navigateToSalesNavigator(page: Page): Promise<boolean> {
   // time (see issue #2). The combined marker wait covers SPA paint;
   // skip networkidle + a fixed delay so an expired /sales/ session
   // fails in ~8s instead of ~77s.
-  if (isAuthFailureUrl(page.url())) return false;
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
   return checkAuthIndicators(page);
 }
 

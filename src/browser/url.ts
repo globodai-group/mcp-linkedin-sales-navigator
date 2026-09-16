@@ -80,6 +80,26 @@ export function isSalesNavigatorUrl(value: string): boolean {
   }
 }
 
+/**
+ * Login / checkpoint / authwall URLs. Used to fail auth checks without
+ * waiting for Sales Navigator chrome that will never render.
+ */
+export function isLinkedInAuthFailureUrl(url: string): boolean {
+  let path = url;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    // keep the raw string
+  }
+  const lower = path.toLowerCase();
+  return (
+    lower.includes("/login") ||
+    lower.includes("/checkpoint") ||
+    lower.includes("/authwall") ||
+    lower.includes("/uas/")
+  );
+}
+
 export function assertListId(listId: string): string {
   if (!LIST_ID_PATTERN.test(listId)) {
     throw new InvalidListIdError();

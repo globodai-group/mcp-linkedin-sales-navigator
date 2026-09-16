@@ -3,15 +3,19 @@
  *
  * Explicit initialize/check step (issue #1): triggers the lazy browser
  * connection and reports auth method, connectivity, and authentication.
+ * Never navigates or reloads the user's current tab.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
-  ensureNavigator,
+  ensureAttached,
   getStoredNavigatorConfig,
-  isNavigatorReady,
 } from "../browser/navigator.js";
 import { authFailureHint } from "../config.js";
+import {
+  isLinkedInAuthFailureUrl,
+  isSalesNavigatorUrl,
+} from "../browser/url.js";
 import type { AuthConfig } from "../types/index.js";
 
 export interface SessionStatus {
@@ -22,9 +26,25 @@ export interface SessionStatus {
   error?: string;
 }
 
+function notOnSalesNavHint(auth: AuthConfig): string {
+  if (auth.method === "cdp") {
+    return [
+      "Browser is connected but no Sales Navigator tab is open.",
+      "Open https://www.linkedin.com/sales/home in the Chrome instance exposed by LSN_CDP_ENDPOINT and retry.",
+      "Call linkedin_session_status to diagnose.",
+    ].join(" ");
+  }
+  return [
+    "Browser is connected but is not on a Sales Navigator page.",
+    "Open https://www.linkedin.com/sales/home and retry.",
+    "Call linkedin_session_status to diagnose.",
+  ].join(" ");
+}
+
 /**
  * Probe browser connection and Sales Navigator authentication.
  * Never throws - always returns a structured status object.
+ * Never calls page.goto or navigateToSalesNavigator.
  */
 export async function probeSessionStatus(): Promise<SessionStatus> {
   const stored = getStoredNavigatorConfig();
@@ -42,23 +62,56 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
   }
 
   try {
-    const nav = await ensureNavigator();
-    let authenticated = false;
-    try {
-      authenticated = await nav.checkAuth();
-    } catch (error) {
+    const nav = await ensureAttached();
+    const browserConnected = nav.isBrowserAttached();
+    if (!browserConnected) {
       return {
         authMethod,
-        browserConnected: nav.isConnected(),
+        browserConnected: false,
         authenticated: false,
-        hint: authFailureHint(stored.auth, error),
-        error: error instanceof Error ? error.message : String(error),
+        hint: authFailureHint(stored.auth, new Error("Browser is not attached")),
+        error: "connection_failed",
       };
     }
 
+    if (!nav.isConnected()) {
+      return {
+        authMethod,
+        browserConnected: true,
+        authenticated: false,
+        hint: notOnSalesNavHint(stored.auth),
+        error: "not_on_sales_nav",
+      };
+    }
+
+    const url = nav.getPage().url();
+    if (isLinkedInAuthFailureUrl(url)) {
+      return {
+        authMethod,
+        browserConnected: true,
+        authenticated: false,
+        hint: authFailureHint(
+          stored.auth,
+          new Error("Not authenticated to LinkedIn Sales Navigator")
+        ),
+        error: "auth_failed",
+      };
+    }
+
+    if (!isSalesNavigatorUrl(url)) {
+      return {
+        authMethod,
+        browserConnected: true,
+        authenticated: false,
+        hint: notOnSalesNavHint(stored.auth),
+        error: "not_on_sales_nav",
+      };
+    }
+
+    const authenticated = await nav.checkAuth();
     return {
       authMethod,
-      browserConnected: nav.isConnected() || isNavigatorReady(),
+      browserConnected: true,
       authenticated,
       hint: authenticated
         ? undefined
@@ -66,6 +119,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
             stored.auth,
             new Error("Not authenticated to LinkedIn Sales Navigator")
           ),
+      error: authenticated ? undefined : "auth_failed",
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -97,7 +151,7 @@ export function registerSessionTools(server: McpServer): void {
     "linkedin_session_status",
     "Check LinkedIn Sales Navigator browser connection and authentication. " +
       "Call this before other tools to verify the session (auth method, browser connected, authenticated). " +
-      "Triggers a lazy browser connect if not yet connected.",
+      "Attaches to the existing browser if needed but never navigates or reloads the current tab.",
     {},
     async () => {
       try {
