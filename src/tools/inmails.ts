@@ -144,12 +144,19 @@ export function registerInMailTools(server: McpServer): void {
         const creditsMatch = creditsText?.match(/InMail credits:\s*(\d+)/i) ?? creditsText?.match(/\d+/);
         const remainingCredits = creditsMatch ? parseInt(creditsMatch[creditsMatch.length - 1], 10) : undefined;
 
+        const success = composeGone || !!successEl;
         const result: InMailResult = {
           // Modal closed or explicit success toast. Do not treat a missing
           // error node as success - compose may still be open after a
           // silent failure (and errorEl is always null on this path).
-          success: composeGone || !!successEl,
+          success,
           remainingCredits,
+          ...(!success
+            ? {
+                error:
+                  "InMail was not sent: the compose window is still open and no success confirmation appeared. The Send click may have been ignored, or credits may be exhausted.",
+              }
+            : {}),
         };
 
         return {
@@ -159,6 +166,7 @@ export function registerInMailTools(server: McpServer): void {
               text: JSON.stringify(result, null, 2),
             },
           ],
+          ...(success ? {} : { isError: true }),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
