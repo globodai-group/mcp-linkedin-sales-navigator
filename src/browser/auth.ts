@@ -65,7 +65,7 @@ async function checkAuthIndicators(page: Page): Promise<boolean> {
  * Inspect the current page only. Never navigates.
  *
  * Returns false immediately on login/checkpoint/authwall or when the
- * tab is not a Sales Navigator URL (so a google.com tab does not wait 8s).
+ * tab is not a Sales Navigator URL (so a google.com tab does not wait 15s).
  */
 export async function inspectCurrentAuth(page: Page): Promise<boolean> {
   const url = page.url();
@@ -153,7 +153,7 @@ export async function navigateToSalesNavigator(page: Page): Promise<boolean> {
   // `isAuthenticated()`, which would navigate to the same URL a second
   // time (see issue #2). The combined marker wait covers SPA paint;
   // skip networkidle + a fixed delay so an expired /sales/ session
-  // fails in ~8s instead of ~77s.
+  // fails in ~15–20s instead of ~77s.
   if (isLinkedInAuthFailureUrl(page.url())) return false;
   return checkAuthIndicators(page);
 }
