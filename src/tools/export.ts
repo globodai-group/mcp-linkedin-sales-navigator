@@ -27,6 +27,7 @@ import {
   budgetErrorResult,
   BudgetExceededError,
   consumeSearchPage,
+  paceIfConfigured,
 } from "../browser/rate-limit.js";
 
 /**
@@ -105,6 +106,7 @@ async function collectLeadsMultiPage(limit: number): Promise<LeadProfile[]> {
     const isDisabled = await nextButton.getAttribute("disabled");
     if (isDisabled !== null) break;
 
+    await paceIfConfigured();
     await nextButton.click();
     await page.waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
     await nav.waitForSelector(
