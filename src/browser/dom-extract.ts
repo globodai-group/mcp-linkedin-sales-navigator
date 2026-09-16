@@ -25,13 +25,18 @@ export interface TopcardHeuristicResult {
 }
 
 /** Runs inside the browser via `page.evaluate(extractTopcardFieldsBrowser)`. */
+function topcardBoundaryFor(nameEl: Element): Element {
+  const profileCard = document.querySelector("#profile-card-section");
+  if (profileCard && profileCard.contains(nameEl)) {
+    return profileCard;
+  }
+  return nameEl.closest("section") ?? nameEl;
+}
+
 export function extractTopcardFieldsBrowser(): TopcardHeuristicResult {
   const nameEl =
     document.querySelector("h1[data-x--lead--name]") ||
     document.querySelector('[data-anonymize="person-name"]') ||
-    Array.from(document.querySelectorAll("h1")).find(
-      (h) => !h.classList.contains("a11y-text")
-    ) ||
     null;
 
   if (!nameEl) {
@@ -39,24 +44,36 @@ export function extractTopcardFieldsBrowser(): TopcardHeuristicResult {
   }
 
   const name = nameEl.textContent?.trim() || null;
+  const boundary = topcardBoundaryFor(nameEl);
 
   // Locate the topcard as the smallest ancestor of the name that also
-  // contains the Save button, instead of trusting a container class.
-  const saveBtn = document.querySelector(
+  // contains the Save button, never walking above the profile topcard
+  // boundary (Save can live in a portal outside the name subtree).
+  const saveBtn = boundary.querySelector(
     '[data-x--lead-save-cta], [data-x--save-menu-trigger], button[aria-label^="Save "]'
   );
 
   let topcard: Element = nameEl;
   if (saveBtn) {
     let candidate: Element | null = nameEl;
-    while (candidate && !candidate.contains(saveBtn)) {
-      candidate = candidate.parentElement;
+    let found = false;
+    while (candidate && boundary.contains(candidate)) {
+      if (candidate.contains(saveBtn)) {
+        topcard = candidate;
+        found = true;
+        break;
+      }
+      const parent = candidate.parentElement;
+      if (!parent || !boundary.contains(parent)) break;
+      candidate = parent;
     }
-    if (candidate) topcard = candidate;
+    if (!found) {
+      return { name, headline: null, location: null, connectionDegree: null };
+    }
   } else {
     // No Save button visible (e.g. already saved and layout differs) -
-    // fall back to a fixed number of ancestor levels.
-    for (let i = 0; i < 5 && topcard.parentElement; i++) {
+    // walk up a few levels but stay inside the topcard boundary.
+    for (let i = 0; i < 5 && topcard.parentElement && boundary.contains(topcard.parentElement); i++) {
       topcard = topcard.parentElement;
     }
   }
