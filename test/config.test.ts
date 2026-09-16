@@ -4,10 +4,11 @@ import { parseConfig } from "../src/config.js";
 const CDP = { LSN_CDP_ENDPOINT: "http://127.0.0.1:9222" };
 
 describe("parseConfig defaults", () => {
-  it("uses cdp, headless false, and numeric viewport/timeout fallbacks", () => {
-    const { config } = parseConfig({});
+  it("uses cdp, localhost:9222, headless false, and numeric viewport/timeout fallbacks", () => {
+    const { config, errors } = parseConfig({});
+    expect(errors).toEqual([]);
     expect(config.auth.method).toBe("cdp");
-    expect(config.auth.cdpEndpoint).toBeUndefined();
+    expect(config.auth.cdpEndpoint).toBe("http://localhost:9222");
     expect(config.auth.cookiesPath).toBeUndefined();
     expect(config.auth.userDataDir).toBeUndefined();
     expect(config.browser.headless).toBe(false);
@@ -15,11 +16,6 @@ describe("parseConfig defaults", () => {
     expect(config.browser.viewportHeight).toBe(900);
     expect(config.browser.navigationTimeout).toBe(30000);
     expect(config.browser.actionTimeout).toBe(10000);
-  });
-
-  it("reports missing CDP endpoint when method defaults to cdp", () => {
-    const { errors } = parseConfig({});
-    expect(errors.some((line) => line.includes("LSN_CDP_ENDPOINT"))).toBe(true);
   });
 
   it("accepts an explicit CDP endpoint with no errors", () => {
@@ -58,20 +54,19 @@ describe("LSN_AUTH_METHOD", () => {
 });
 
 describe("cdp without endpoint", () => {
-  it("errors when method is cdp and LSN_CDP_ENDPOINT is missing", () => {
-    const { errors } = parseConfig({ LSN_AUTH_METHOD: "cdp" });
-    expect(errors).toContain(
-      'LSN_CDP_ENDPOINT is required when LSN_AUTH_METHOD is "cdp" (e.g. http://localhost:9222)'
-    );
+  it("defaults CDP endpoint when method is cdp and LSN_CDP_ENDPOINT is missing", () => {
+    const { config, errors } = parseConfig({ LSN_AUTH_METHOD: "cdp" });
+    expect(errors).toEqual([]);
+    expect(config.auth.cdpEndpoint).toBe("http://localhost:9222");
   });
 
-  it("treats a blank endpoint as missing", () => {
+  it("treats a blank endpoint as the localhost default", () => {
     const { errors, config } = parseConfig({
       LSN_AUTH_METHOD: "cdp",
       LSN_CDP_ENDPOINT: "   ",
     });
-    expect(config.auth.cdpEndpoint).toBeUndefined();
-    expect(errors.some((line) => line.includes("LSN_CDP_ENDPOINT"))).toBe(true);
+    expect(errors).toEqual([]);
+    expect(config.auth.cdpEndpoint).toBe("http://localhost:9222");
   });
 });
 
