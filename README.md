@@ -237,6 +237,19 @@ When using Clawdbot's browser relay, the AI assistant can directly control a bro
 }
 ```
 
+## Troubleshooting
+
+Start with the `linkedin_session_status` tool. It connects lazily (same as other tools), reports `authMethod`, `connected`, `authenticated`, and a short hint for the next step.
+
+| Symptom | What to check |
+|---------|----------------|
+| **Browser not initialized** | Fixed in **0.2.0**: the browser connects on each tool call if startup failed. Ensure Chrome is running with remote debugging (CDP) or paths are set for `session` / `cookies`. Retry after fixing the environment. |
+| **Not authenticated** | Sales Navigator’s shell renders a few seconds after load. Log in at [linkedin.com/sales](https://www.linkedin.com/sales) in the same browser profile the server uses, then call `linkedin_session_status` again. |
+| **CDP endpoint unreachable** | Confirm Chrome was started with `--remote-debugging-port=9222` (or your port), nothing else bound to that port, and `LSN_CDP_ENDPOINT` matches (including `http://`). |
+| **Expired session / cookie** | Re-authenticate in the browser or refresh exported cookies. An expired `li_at` cookie produces auth failures until you sign in again. |
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for reporting selector breakage without sharing secrets.
+
 ## Architecture
 
 ```
@@ -276,16 +289,30 @@ npm run lint
 
 # Type check
 npm run typecheck
+
+# Unit tests
+npm test
 ```
 
 ## Selector Maintenance
 
-LinkedIn periodically updates their DOM structure. If tools stop working:
+LinkedIn rotates hashed CSS module classes on every deploy. Selectors in this project follow a fixed priority (see PR #3 and `src/browser/selectors.ts`):
 
-1. Open Sales Navigator in Chrome DevTools
-2. Inspect the elements that changed
-3. Update selectors in `src/browser/selectors.ts`
-4. Submit a PR with the updated selectors
+1. **`data-anonymize="..."`** and similar LinkedIn field markers (`person-name`, `headline`, `title`, `company-name`, …)
+2. **`data-x--...`**, `data-sn-view-name`, `data-control-name` — product hooks tied to behavior
+3. **Semantic HTML / ARIA** and shared **`artdeco-*`** design-system classes
+4. **Playwright text matchers** (`:has-text()`, `:text-matches()`) only when nothing else is stable
+
+Field locators are **prioritised arrays**, resolved in order by `src/browser/query.ts` (not comma-separated CSS lists, which follow document order).
+
+The lead profile **topcard** headline and location often lack stable hooks. `src/browser/dom-extract.ts` walks structure from stable anchors (name `h1`, Save button) and reads text by position, with selector fallbacks afterward.
+
+When tools break after a LinkedIn UI change:
+
+1. Reproduce on the affected page and tool
+2. Inspect DOM hooks (`data-anonymize`, `data-control-name`) before class names
+3. Update selectors, query arrays, or dom-extract heuristics as needed
+4. Open a PR with a redacted HTML snippet (see [CONTRIBUTING.md](CONTRIBUTING.md))
 
 ## License
 
