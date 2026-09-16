@@ -85,10 +85,16 @@ Start Chrome with remote debugging:
 google-chrome --remote-debugging-port=9222
 
 # Windows
-chrome.exe --remote-debugging-port=9222
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+
+# If Chrome is installed elsewhere, quote the full path. Node.js 20+ is required.
 ```
 
+Use PowerShell or Command Prompt. Keep the debugging port free (default `9222`) and match `LSN_CDP_ENDPOINT`.
+
 Then log into LinkedIn Sales Navigator manually. The MCP server connects to this browser.
+
+**Shutdown behavior (CDP):** when the MCP server exits, it **detaches** from your Chrome instance only. It does **not** close your tabs or quit the browser.
 
 ```bash
 LSN_AUTH_METHOD=cdp LSN_CDP_ENDPOINT=http://localhost:9222 npx globodai-mcp-linkedin-sales-navigator
