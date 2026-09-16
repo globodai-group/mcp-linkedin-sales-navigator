@@ -17,6 +17,7 @@ import {
   isSalesNavigatorUrl,
 } from "../browser/url.js";
 import type { AuthConfig } from "../types/index.js";
+import { readUsageToday, type UsageToday } from "../browser/rate-limit.js";
 
 export interface SessionStatus {
   authMethod: AuthConfig["method"] | "unknown";
@@ -24,6 +25,7 @@ export interface SessionStatus {
   authenticated: boolean;
   hint?: string;
   error?: string;
+  usageToday?: UsageToday;
 }
 
 function notOnSalesNavHint(auth: AuthConfig): string {
@@ -50,6 +52,8 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
   const stored = getStoredNavigatorConfig();
   const authMethod = stored?.auth.method ?? "unknown";
 
+  const usageToday = await readUsageToday();
+
   if (!stored) {
     return {
       authMethod: "unknown",
@@ -58,6 +62,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
       hint:
         "Navigator is not configured. Check LSN_AUTH_METHOD and related LSN_* variables.",
       error: "missing_config",
+      usageToday,
     };
   }
 
@@ -71,6 +76,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
         authenticated: false,
         hint: authFailureHint(stored.auth, new Error("Browser is not attached")),
         error: "connection_failed",
+        usageToday,
       };
     }
 
@@ -81,6 +87,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
         authenticated: false,
         hint: notOnSalesNavHint(stored.auth),
         error: "not_on_sales_nav",
+        usageToday,
       };
     }
 
@@ -95,6 +102,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
           new Error("Not authenticated to LinkedIn Sales Navigator")
         ),
         error: "auth_failed",
+        usageToday,
       };
     }
 
@@ -105,6 +113,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
         authenticated: false,
         hint: notOnSalesNavHint(stored.auth),
         error: "not_on_sales_nav",
+        usageToday,
       };
     }
 
@@ -120,6 +129,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
             new Error("Not authenticated to LinkedIn Sales Navigator")
           ),
       error: authenticated ? undefined : "auth_failed",
+      usageToday,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -139,6 +149,7 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
       authenticated: false,
       hint: alreadyHinted ? message : authFailureHint(stored.auth, error),
       error: authFailed ? "auth_failed" : "connection_failed",
+      usageToday,
     };
   }
 }
@@ -149,8 +160,8 @@ export async function probeSessionStatus(): Promise<SessionStatus> {
 export function registerSessionTools(server: McpServer): void {
   server.tool(
     "linkedin_session_status",
-    "Check LinkedIn Sales Navigator browser connection and authentication. " +
-      "Call this before other tools to verify the session (auth method, browser connected, authenticated). " +
+    "Check LinkedIn Sales Navigator browser connection, authentication, and today's usage budgets. " +
+      "Call this before other tools to verify the session (auth method, browser connected, authenticated, usageToday). " +
       "Attaches to the existing browser if needed but never navigates or reloads the current tab.",
     {},
     async () => {
@@ -175,6 +186,7 @@ export function registerSessionTools(server: McpServer): void {
           authenticated: false,
           hint: `${message} Call linkedin_session_status again after fixing LSN_* configuration.`,
           error: message,
+          usageToday: await readUsageToday(),
         };
         return {
           content: [
