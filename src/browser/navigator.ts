@@ -427,10 +427,17 @@ export async function ensureNavigator(): Promise<SalesNavigator> {
       }
       void nav.close().catch(() => {});
     });
-    await nav.initialize(auth);
-    navigatorInstance = nav;
-    navigatorReady = true;
-    return nav;
+    try {
+      await nav.initialize(auth);
+      navigatorInstance = nav;
+      navigatorReady = true;
+      return nav;
+    } catch (error) {
+      // initialize() also closes, but a throw before that catch (or a
+      // future edit that drops it) must not leak a CDP connection.
+      await nav.close().catch(() => {});
+      throw error;
+    }
   })();
 
   try {
