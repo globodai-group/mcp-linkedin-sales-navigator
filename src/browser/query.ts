@@ -40,6 +40,15 @@ export function anyOf(selectors: SelectorList): string {
   return toSelectorArray(selectors).join(", ");
 }
 
+export type TextQueryOptions = {
+  /**
+   * When true, a matching element with empty trimmed textContent is
+   * skipped so the next selector in the list is tried. Element lookups
+   * (buttons, inputs) should use {@link queryFirst} instead.
+   */
+  requireText?: boolean;
+};
+
 /** First element matching the highest-priority selector that matches at all. */
 export async function queryFirst(
   scope: Queryable,
@@ -79,10 +88,26 @@ export function stripSuffix(text: string, suffix: string): string {
 /** Trimmed text of the first matching element, or null. */
 export async function textOfFirst(
   scope: Queryable,
+  selectors: SelectorList,
+  options?: TextQueryOptions
+): Promise<string | null> {
+  const requireText = options?.requireText ?? false;
+
+  for (const selector of toSelectorArray(selectors)) {
+    const element = await scope.$(selector).catch(() => null);
+    if (!element) continue;
+    const text = await element.textContent().catch(() => null);
+    const trimmed = text?.trim() || null;
+    if (requireText && !trimmed) continue;
+    return trimmed;
+  }
+  return null;
+}
+
+/** Profile/search field text — skips empty matches and tries fallbacks (refs #2). */
+export async function textOfField(
+  scope: Queryable,
   selectors: SelectorList
 ): Promise<string | null> {
-  const element = await queryFirst(scope, selectors);
-  if (!element) return null;
-  const text = await element.textContent().catch(() => null);
-  return text?.trim() || null;
+  return textOfFirst(scope, selectors, { requireText: true });
 }

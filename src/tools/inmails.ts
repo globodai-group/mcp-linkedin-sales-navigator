@@ -7,9 +7,16 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ensureNavigator } from "../browser/navigator.js";
+import { assertSalesNavigatorUrl, salesNavigatorUrlSchema } from "../browser/url.js";
 import { INMAIL_SELECTORS, PROFILE_SELECTORS, WAIT_CONDITIONS } from "../browser/selectors.js";
 import { queryFirst } from "../browser/query.js";
 import type { InMailResult } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  recordInMailAttempt,
+} from "../browser/rate-limit.js";
 
 /**
  * Register InMail tools with the MCP server.
@@ -17,11 +24,13 @@ import type { InMailResult } from "../types/index.js";
 export function registerInMailTools(server: McpServer): void {
   server.tool(
     "linkedin_send_inmail",
-    "Send an InMail message to a lead on LinkedIn Sales Navigator. Requires available InMail credits.",
+    "Send an InMail message to a lead on LinkedIn Sales Navigator. " +
+      "Requires available InMail credits. " +
+      "Always preview first with dryRun=true before sending (default dryRun=false preserves prior behaviour).",
     {
-      profileUrl: z
-        .string()
-        .describe("Sales Navigator profile URL of the recipient"),
+      profileUrl: salesNavigatorUrlSchema.describe(
+        "Sales Navigator profile URL of the recipient"
+      ),
       subject: z
         .string()
         .max(200)
@@ -34,10 +43,16 @@ export function registerInMailTools(server: McpServer): void {
         .boolean()
         .optional()
         .default(false)
-        .describe("If true, compose the InMail but don't send it (for review)"),
+        .describe(
+          "If true, compose the InMail with human-like pacing but do not click Send (preview/review only). Prefer true before a real send."
+        ),
     },
     async (params) => {
       try {
+        if (!params.dryRun) {
+          await assertWithinBudget("inmails");
+        }
+        assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
         const page = nav.getPage();
 
@@ -102,6 +117,7 @@ export function registerInMailTools(server: McpServer): void {
           throw new Error("Send button not found in compose modal");
         }
 
+        await recordInMailAttempt(false);
         await nav.clickAndSettle(sendButton, 1500);
         await nav.humanDelay(1000, 2000);
 
@@ -140,9 +156,19 @@ export function registerInMailTools(server: McpServer): void {
         const creditsMatch = creditsText?.match(/InMail credits:\s*(\d+)/i) ?? creditsText?.match(/\d+/);
         const remainingCredits = creditsMatch ? parseInt(creditsMatch[creditsMatch.length - 1], 10) : undefined;
 
+        const success = composeGone || !!successEl;
         const result: InMailResult = {
-          success: composeGone || !!successEl || !errorEl,
+          // Modal closed or explicit success toast. Do not treat a missing
+          // error node as success - compose may still be open after a
+          // silent failure (and errorEl is always null on this path).
+          success,
           remainingCredits,
+          ...(!success
+            ? {
+                error:
+                  "InMail was not sent: the compose window is still open and no success confirmation appeared. The Send click may have been ignored, or credits may be exhausted.",
+              }
+            : {}),
         };
 
         return {
@@ -152,8 +178,10 @@ export function registerInMailTools(server: McpServer): void {
               text: JSON.stringify(result, null, 2),
             },
           ],
+          ...(success ? {} : { isError: true }),
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

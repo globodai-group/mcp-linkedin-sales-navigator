@@ -7,10 +7,17 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ensureNavigator } from "../browser/navigator.js";
+import { assertSalesNavigatorUrl, salesNavigatorUrlSchema } from "../browser/url.js";
 import { PROFILE_SELECTORS, WAIT_CONDITIONS } from "../browser/selectors.js";
 import { queryAll, queryFirst, textOfFirst } from "../browser/query.js";
 import { extractEntryDatesBrowser } from "../browser/dom-extract.js";
 import type { LeadProfile, ExperienceEntry, EducationEntry } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  recordAttempt,
+} from "../browser/rate-limit.js";
 
 /**
  * Parse a lead profile from the current page.
@@ -104,14 +111,18 @@ export function registerLeadTools(server: McpServer): void {
     "linkedin_get_lead_profile",
     "Get detailed profile information for a LinkedIn Sales Navigator lead",
     {
-      profileUrl: z
-        .string()
-        .describe("Sales Navigator profile URL (e.g., https://www.linkedin.com/sales/lead/...)"),
+      profileUrl: salesNavigatorUrlSchema.describe(
+        "Sales Navigator profile URL (e.g., https://www.linkedin.com/sales/lead/...)"
+      ),
     },
     async (params) => {
       try {
+        await assertWithinBudget("profileViews");
+        // Reject off-site URLs before opening a browser connection.
+        assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
 
+        await recordAttempt("profileViews");
         // Navigate to the profile
         await nav.goToProfile(params.profileUrl);
 
@@ -127,6 +138,7 @@ export function registerLeadTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [
@@ -143,13 +155,27 @@ export function registerLeadTools(server: McpServer): void {
 
   server.tool(
     "linkedin_save_lead",
-    "Save a lead to a list on LinkedIn Sales Navigator",
+    "Save a lead to a list on LinkedIn Sales Navigator. " +
+      "Always preview first with dryRun=true before saving (default dryRun=false preserves prior behaviour).",
     {
-      profileUrl: z.string().describe("Sales Navigator profile URL of the lead to save"),
+      profileUrl: salesNavigatorUrlSchema.describe(
+        "Sales Navigator profile URL of the lead to save"
+      ),
       listName: z.string().optional().describe("Name of the list to save to (default: saved leads)"),
+      dryRun: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "If true, locate the save UI with human-like pacing but do not click Save (preview only). Prefer true before a real save."
+        ),
     },
     async (params) => {
       try {
+        if (!params.dryRun) {
+          await assertWithinBudget("saves");
+        }
+        assertSalesNavigatorUrl(params.profileUrl);
         const nav = await ensureNavigator();
         const page = nav.getPage();
 
@@ -176,6 +202,24 @@ export function registerLeadTools(server: McpServer): void {
           throw new Error("Save button not found on profile page");
         }
 
+        if (params.dryRun) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: true,
+                  dryRun: true,
+                  message:
+                    "Dry run - save button found but not clicked. Re-run with dryRun=false to save.",
+                  listName: params.listName ?? null,
+                }),
+              },
+            ],
+          };
+        }
+
+        await recordAttempt("saves");
         await nav.clickAndSettle(saveButton, WAIT_CONDITIONS.BUTTON_STATE_SETTLE);
 
         // If a specific list is requested, handle list selection
@@ -200,6 +244,7 @@ export function registerLeadTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

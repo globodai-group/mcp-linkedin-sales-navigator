@@ -12,7 +12,21 @@
 
 import { type Page, type BrowserContext } from "playwright";
 import { AUTH_SELECTORS, URLS, WAIT_CONDITIONS } from "./selectors.js";
+import { anyOf } from "./query.js";
+import {
+  isLinkedInAuthFailureUrl,
+  isSalesNavigatorUrl,
+} from "./url.js";
 import type { AuthConfig } from "../types/index.js";
+
+/** Combined presence check: header or profile icon, order does not matter. */
+const LOGGED_IN_MARKERS = anyOf([
+  AUTH_SELECTORS.SALES_NAV_HEADER,
+  AUTH_SELECTORS.PROFILE_ICON,
+]);
+
+/** Bound for the logged-in marker wait (one retry may add a short extra wait). */
+const AUTH_MARKER_TIMEOUT_MS = 8000;
 
 /**
  * Check whether the current page (no navigation) shows an
@@ -20,47 +34,42 @@ import type { AuthConfig } from "../types/index.js";
  * wherever the page currently is.
  */
 async function checkAuthIndicators(page: Page): Promise<boolean> {
-  // Sales Navigator is an Ember SPA whose global nav renders several
-  // seconds *after* the page reaches `networkidle` (measured ~4s on a
-  // live session). The previous implementation probed with an instant
-  // `page.$()` at that point, so it consistently found nothing and
-  // reported an authenticated session as logged-out - the tools then
-  // refused to start at all (issue #2).
-  //
-  // `waitForSelector` is the actual fix. The retry loop on top covers
-  // the SPA performing a further client-side navigation mid-check,
-  // which would otherwise reject the pending wait.
-  const ATTEMPTS = 3;
+  // Fail fast: login / checkpoint / authwall means the session is dead.
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
 
-  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    // Redirected to login/authwall - conclusive, no point retrying.
-    const currentUrl = page.url();
-    if (currentUrl.includes("/login") || currentUrl.includes("/authwall")) {
-      return false;
-    }
+  const challenge = await page.$(AUTH_SELECTORS.CHALLENGE_PAGE).catch(() => null);
+  if (challenge) return false;
 
-    // A logged-in session shows either the global nav header or the
-    // profile icon. `waitForSelector` (rather than an instant
-    // `page.$()`) also covers the case where the SPA simply hasn't
-    // rendered them yet.
-    for (const selector of [
-      AUTH_SELECTORS.SALES_NAV_HEADER,
-      AUTH_SELECTORS.PROFILE_ICON,
-    ]) {
-      const found = await page
-        .waitForSelector(selector, {
-          timeout: WAIT_CONDITIONS.PROFILE_LOAD_TIMEOUT,
-        })
-        .catch(() => null);
-      if (found) return true;
-    }
+  // Sales Navigator is an Ember SPA whose global nav can render a few
+  // seconds after DOMContentLoaded. One combined wait covers any
+  // logged-in marker; a single retry handles a mid-check client-side
+  // navigation without stacking 10s waits per selector.
+  const urlBefore = page.url();
+  const found = await page
+    .waitForSelector(LOGGED_IN_MARKERS, { timeout: AUTH_MARKER_TIMEOUT_MS })
+    .catch(() => null);
+  if (found) return true;
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
 
-    // Nothing found - let any in-flight client-side navigation settle
-    // before trying once more.
-    await page.waitForTimeout(WAIT_CONDITIONS.ACTION_DELAY).catch(() => {});
-  }
+  // At most one retry, and only if the document actually changed.
+  if (page.url() === urlBefore) return false;
+  const retry = await page
+    .waitForSelector(LOGGED_IN_MARKERS, { timeout: 2000 })
+    .catch(() => null);
+  return retry !== null;
+}
 
-  return false;
+/**
+ * Inspect the current page only. Never navigates.
+ *
+ * Returns false immediately on login/checkpoint/authwall or when the
+ * tab is not a Sales Navigator URL (so a google.com tab does not wait 8s).
+ */
+export async function inspectCurrentAuth(page: Page): Promise<boolean> {
+  const url = page.url();
+  if (isLinkedInAuthFailureUrl(url)) return false;
+  if (!isSalesNavigatorUrl(url)) return false;
+  return checkAuthIndicators(page);
 }
 
 /**
@@ -134,16 +143,16 @@ export async function waitForManualAuth(
  */
 export async function navigateToSalesNavigator(page: Page): Promise<boolean> {
   await page.goto(URLS.HOME, {
-    waitUntil: "networkidle",
+    waitUntil: "domcontentloaded",
     timeout: WAIT_CONDITIONS.SEARCH_RESULTS_TIMEOUT,
   });
 
-  // Wait for the page to settle
-  await page.waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
-
   // Check indicators on the page we just loaded rather than calling
   // `isAuthenticated()`, which would navigate to the same URL a second
-  // time (see issue #2).
+  // time (see issue #2). The combined marker wait covers SPA paint;
+  // skip networkidle + a fixed delay so an expired /sales/ session
+  // fails in ~8s instead of ~77s.
+  if (isLinkedInAuthFailureUrl(page.url())) return false;
   return checkAuthIndicators(page);
 }
 

@@ -7,6 +7,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ensureNavigator } from "../browser/navigator.js";
+import { assertListId, listIdSchema } from "../browser/url.js";
 import {
   SEARCH_SELECTORS,
   LIST_SELECTORS,
@@ -21,6 +22,13 @@ import {
   stripSuffix,
 } from "../browser/query.js";
 import type { LeadProfile } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  consumeSearchPage,
+  paceIfConfigured,
+} from "../browser/rate-limit.js";
 
 /**
  * Collect leads from the current page (search results or list detail).
@@ -29,12 +37,19 @@ async function collectLeadsFromPage(): Promise<LeadProfile[]> {
   const nav = await ensureNavigator();
   const page = nav.getPage();
 
-  const resultSelector =
-    page.url().includes("/search/")
-      ? SEARCH_SELECTORS.RESULT_ITEM
-      : LIST_SELECTORS.LIST_LEAD_ITEM;
-
-  const elements = await queryAll(page, resultSelector);
+  const onSearch = page.url().includes("/search/");
+  let elements;
+  if (onSearch) {
+    elements = await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM_IN_CONTAINER);
+    if (elements.length === 0) {
+      const container = await queryFirst(page, SEARCH_SELECTORS.RESULTS_CONTAINER);
+      elements = container
+        ? await queryAll(container, SEARCH_SELECTORS.RESULT_ITEM)
+        : await queryAll(page, SEARCH_SELECTORS.RESULT_ITEM);
+    }
+  } else {
+    elements = await queryAll(page, LIST_SELECTORS.LIST_LEAD_ITEM);
+  }
   const leads: LeadProfile[] = [];
 
   for (const el of elements) {
@@ -78,6 +93,7 @@ async function collectLeadsMultiPage(limit: number): Promise<LeadProfile[]> {
   const allLeads: LeadProfile[] = [];
 
   while (allLeads.length < limit) {
+    await consumeSearchPage();
     const pageLeads = await collectLeadsFromPage();
     allLeads.push(...pageLeads);
 
@@ -90,6 +106,7 @@ async function collectLeadsMultiPage(limit: number): Promise<LeadProfile[]> {
     const isDisabled = await nextButton.getAttribute("disabled");
     if (isDisabled !== null) break;
 
+    await paceIfConfigured();
     await nextButton.click();
     await page.waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
     await nav.waitForSelector(
@@ -147,8 +164,7 @@ export function registerExportTools(server: McpServer): void {
       source: z
         .enum(["current_search", "list"])
         .describe('Export from current search results ("current_search") or a specific list ("list")'),
-      listId: z
-        .string()
+      listId: listIdSchema
         .optional()
         .describe("List ID to export from (required if source is 'list')"),
       format: z
@@ -170,14 +186,22 @@ export function registerExportTools(server: McpServer): void {
     },
     async (params) => {
       try {
-        const nav = await ensureNavigator();
-        const effectiveLimit = Math.min(params.limit, 250);
-
+        let listId: string | undefined;
         if (params.source === "list") {
           if (!params.listId) {
             throw new Error("listId is required when source is 'list'");
           }
-          await nav.navigateTo(`${URLS.LEAD_LISTS}/${params.listId}`);
+          listId = assertListId(params.listId);
+        }
+
+        await assertWithinBudget("searches");
+        const nav = await ensureNavigator();
+        const effectiveLimit = Math.min(params.limit, 250);
+
+        if (listId) {
+          await nav.navigateTo(
+            `${URLS.LEAD_LISTS}/${encodeURIComponent(listId)}`
+          );
           await nav
             .getPage()
             .waitForTimeout(WAIT_CONDITIONS.NAVIGATION_DELAY);
@@ -212,6 +236,7 @@ export function registerExportTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

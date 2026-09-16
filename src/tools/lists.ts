@@ -10,6 +10,12 @@ import { ensureNavigator } from "../browser/navigator.js";
 import { LIST_SELECTORS, WAIT_CONDITIONS } from "../browser/selectors.js";
 import { queryAll, queryFirst, textOfFirst } from "../browser/query.js";
 import type { LeadList } from "../types/index.js";
+import {
+  assertWithinBudget,
+  budgetErrorResult,
+  BudgetExceededError,
+  recordAttempt,
+} from "../browser/rate-limit.js";
 
 /**
  * Parse lead lists from the lists page.
@@ -92,6 +98,7 @@ export function registerListTools(server: McpServer): void {
     },
     async (params) => {
       try {
+        await assertWithinBudget("saves");
         const nav = await ensureNavigator();
         const page = nav.getPage();
 
@@ -132,6 +139,7 @@ export function registerListTools(server: McpServer): void {
               "the name may be empty, too long, or duplicate an existing list."
           );
         }
+        await recordAttempt("saves");
         await nav.clickAndSettle(saveButton, 1500);
 
         return {
@@ -146,6 +154,7 @@ export function registerListTools(server: McpServer): void {
           ],
         };
       } catch (error) {
+        if (error instanceof BudgetExceededError) return budgetErrorResult(error);
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [

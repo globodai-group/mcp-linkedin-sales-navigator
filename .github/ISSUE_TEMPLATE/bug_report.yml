@@ -1,0 +1,95 @@
+name: Bug report
+description: Something broke (selectors, auth, tool errors)
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do **not** paste cookies, `li_at`, or session exports. Redact secrets in logs.
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: node_version
+    attributes:
+      label: Node.js version
+      placeholder: "e.g. 22.15.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth_method
+    attributes:
+      label: LSN_AUTH_METHOD
+      options:
+        - cdp
+        - session
+        - cookies
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: mcp_client
+    attributes:
+      label: MCP client
+      placeholder: "e.g. Claude Desktop, Claude Code, Cursor"
+    validations:
+      required: true
+
+  - type: input
+    id: tool_name
+    attributes:
+      label: Tool name
+      placeholder: "e.g. linkedin_search_leads"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: Tool arguments (no real profile URLs with PII if possible), env vars (names only)
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (secrets redacted)
+      description: MCP server stderr, tool error text. Remove cookie values and tokens.
+    validations:
+      required: false
+
+  - type: textarea
+    id: html_snippet
+    attributes:
+      label: Redacted HTML snippet (optional)
+      description: Element structure for selector issues; no personal data.
+    validations:
+      required: false
