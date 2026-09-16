@@ -5,6 +5,7 @@ import {
   queryAll,
   queryFirst,
   stripSuffix,
+  textOfField,
   textOfFirst,
   toSelectorArray,
 } from "../src/browser/query.js";
@@ -234,6 +235,30 @@ describe("textOfFirst", () => {
       },
     ]);
     await expect(textOfFirst(page, TITLE_THEN_SUBTITLE)).resolves.toBeNull();
+  });
+
+  it("skips empty matches when requireText is set and tries the next selector", async () => {
+    const page = new FakePage([
+      {
+        id: "title",
+        text: "  ",
+        matches: (selector) => selector === '[data-anonymize="title"]',
+      },
+      {
+        id: "blurb",
+        text: "Open to work",
+        matches: (selector) => selector === '[data-anonymize="person-blurb"]',
+      },
+    ]);
+    const selectors = [
+      '[data-anonymize="title"]',
+      '[data-anonymize="person-blurb"]',
+    ] as const;
+    await expect(textOfFirst(page, selectors)).resolves.toBeNull();
+    await expect(textOfFirst(page, selectors, { requireText: true })).resolves.toBe(
+      "Open to work"
+    );
+    await expect(textOfField(page, selectors)).resolves.toBe("Open to work");
   });
 });
 
